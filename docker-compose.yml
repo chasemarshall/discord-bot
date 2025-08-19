@@ -13,6 +13,8 @@ services:
       - ROLE_CHANGES_ID=${ROLE_CHANGES_ID}
       - ROLE_STATUS_ID=${ROLE_STATUS_ID}
       - ROLE_PICK_CHANNEL_ID=${ROLE_PICK_CHANNEL_ID}
+      - PIPED_API_BASE=${PIPED_API_BASE}
+      - PIPED_FRONTEND_BASE=${PIPED_FRONTEND_BASE}
       - TZ=America/Chicago
     restart: unless-stopped
 
