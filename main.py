@@ -14,6 +14,10 @@ ROLE_CHANGES_ID      = int(os.getenv("ROLE_CHANGES_ID", "0") or 0)
 ROLE_STATUS_ID       = int(os.getenv("ROLE_STATUS_ID", "0") or 0)
 ROLE_PICK_CHANNEL_ID = int(os.getenv("ROLE_PICK_CHANNEL_ID", "0") or 0)
 
+# Piped endpoints (your instance)
+PIPED_API_BASE      = os.getenv("PIPED_API_BASE", "https://piped.video/api/v1").rstrip("/")
+PIPED_FRONTEND_BASE = os.getenv("PIPED_FRONTEND_BASE", "https://piped.video").rstrip("/")
+
 # single place to change the theme color (lavender)
 LAVENDER = 0xB57EDC
 
@@ -46,9 +50,9 @@ async def reply_embed(inter: discord.Interaction, title: str, desc: str, *, ephe
 
 async def http_get_json(url: str, params: dict | None = None, timeout_sec: float = 8.0):
     """Minimal JSON GET with sane timeouts and errors."""
+    global _http
     if params is None:
         params = {}
-    global _http
     if _http is None or _http.closed:
         _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec))
     try:
@@ -60,6 +64,19 @@ async def http_get_json(url: str, params: dict | None = None, timeout_sec: float
         raise RuntimeError("timeout")
     except aiohttp.ClientError as e:
         raise RuntimeError(str(e) or "client error")
+
+def hhmmss(seconds: int | None) -> str:
+    if seconds is None:
+        return "—"
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return "—"
+    h, r = divmod(seconds, 3600)
+    m, s = divmod(r, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 # ===== role picker =====
 class RolePicker(discord.ui.View):
@@ -123,13 +140,12 @@ async def on_ready():
             await tree.sync(guild=discord.Object(id=GUILD_ID))
         else:
             await tree.sync()
-        print(f"✅ Logged in as {client.user} — commands synced.")
+        print(f"Logged in as {client.user} — commands synced.")
     except Exception as e:
         print("Sync failed:", e)
 
 @client.event
 async def on_close():
-    # discord.py doesn't always call this; but keep for cleanliness
     global _http
     if _http and not _http.closed:
         await _http.close()
@@ -181,123 +197,84 @@ async def help_cmd(inter: discord.Interaction):
         "/rolesetup — post role picker (owner only)",
         "/status — bot presence + latency",
         "/purge — delete recent messages (requires Manage Messages)",
-        "/weather <place> [unit] — current weather",
-        "/wiki <query> — short summary",
+        "/yt <query> [limit] — search your Piped",
+        "/resync <scope> — refresh slash commands (owner only)",
         "/help — this list",
-        "/say — send an embed to a channel (owner only)",
     ]
     await reply_embed(inter, "Commands", "\n".join(lines), ephemeral=True)
 
-@tree.command(name="say", description="Send a simple embed to a channel (owner only).")
-@app_commands.describe(message="Text to send", channel="Target channel (optional)")
+# ===== PIPED: /yt search =====
+@tree.command(name="yt", description="Search YouTube via your Piped instance.")
+@app_commands.describe(query="Search terms", limit="Max results (1–5, default 3)")
 @cooldown_medium
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
-async def say_cmd(inter: discord.Interaction, message: str, channel: discord.TextChannel | None = None):
+async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Range[int, 1, 5] = 3):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        data = await http_get_json(f"{PIPED_API_BASE}/search", {"q": query, "region": "US"})
+    except RuntimeError as e:
+        return await inter.followup.send(embed=emb("YouTube", f"Search failed: {e}"), ephemeral=True)
+
+    if not isinstance(data, list) or not data:
+        return await inter.followup.send(embed=emb("YouTube", "No results."), ephemeral=True)
+
+    # filter to videos only if mixed
+    videos = [x for x in data if (isinstance(x, dict) and (x.get("type") == "video" or "videoId" in x))]
+    videos = videos[:limit]
+
+    if not videos:
+        return await inter.followup.send(embed=emb("YouTube", "No video results."), ephemeral=True)
+
+    lines = []
+    for i, v in enumerate(videos, 1):
+        vid = v.get("videoId") or v.get("url", "").split("v=")[-1]
+        title = v.get("title", "Untitled")
+        ch = v.get("uploaderName") or v.get("uploader") or "Unknown"
+        dur = hhmmss(v.get("duration"))
+        watch = f"{PIPED_FRONTEND_BASE}/watch?v={vid}" if vid else PIPED_FRONTEND_BASE
+        lines.append(f"{i}. [{title}]({watch}) — {ch} — {dur}")
+
+    await inter.followup.send(embed=emb("YouTube", "\n".join(lines)), ephemeral=True)
+
+# ===== RESYNC: fix missing/duplicate slash commands =====
+@tree.command(name="resync", description="Refresh slash commands (owner only).")
+@app_commands.describe(scope="Where to sync")
+@app_commands.choices(scope=[
+    app_commands.Choice(name="guild", value="guild"),
+    app_commands.Choice(name="global", value="global"),
+    app_commands.Choice(name="guild-clear-then-global", value="guild_clear"),
+])
+@cooldown_fast
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def resync_cmd(inter: discord.Interaction, scope: app_commands.Choice[str]):
     if not is_owner(inter):
         return await reply_embed(inter, "Denied", "Only the owner can do that.")
-    target = channel or inter.channel
-    await target.send(embed=emb("Message", message))
-    await reply_embed(inter, "Sent", f"Posted in {target.mention}.", ephemeral=True)
 
-# ===== web features =====
-
-@tree.command(name="weather", description="Current weather for a place.")
-@app_commands.describe(place="City or place name (e.g., Chicago, IL or London)", unit="Units: auto, metric, imperial")
-@app_commands.choices(unit=[
-    app_commands.Choice(name="auto", value="auto"),
-    app_commands.Choice(name="metric (°C, m/s)", value="metric"),
-    app_commands.Choice(name="imperial (°F, mph)", value="imperial"),
-])
-@cooldown_medium
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
-async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
-    await inter.response.defer(ephemeral=True, thinking=True)
-
-    # geocode via Open-Meteo (no key)
-    try:
-        geo = await http_get_json(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            {"name": place, "count": 1, "language": "en", "format": "json"}
-        )
-        if not geo or not geo.get("results"):
-            return await inter.followup.send(embed=emb("Weather", "Location not found."))
-        g0 = geo["results"][0]
-        lat, lon = g0["latitude"], g0["longitude"]
-        display_name = f"{g0.get('name','')} {g0.get('admin1','') or ''} {g0.get('country','') or ''}".strip()
-    except RuntimeError as e:
-        return await inter.followup.send(embed=emb("Weather", f"Geocoding failed: {e}"))
-
-    # units
-    choice = (unit.value if unit else "auto")
-    temp_unit = "fahrenheit" if choice == "imperial" else ("celsius" if choice == "metric" else "fahrenheit" if "US" in (g0.get("country_code","") or "") else "celsius")
-    wind_unit = "mph" if temp_unit == "fahrenheit" else "ms"
-
-    # forecast via Open-Meteo
-    try:
-        wx = await http_get_json(
-            "https://api.open-meteo.com/v1/forecast",
-            {
-                "latitude": lat, "longitude": lon,
-                "current_weather": "true",
-                "hourly": "temperature_2m,precipitation_probability",
-                "temperature_unit": "fahrenheit" if temp_unit == "fahrenheit" else "celsius",
-                "windspeed_unit": "mph" if wind_unit == "mph" else "ms",
-            }
-        )
-        cur = wx.get("current_weather", {})
-        if not cur:
-            return await inter.followup.send(embed=emb("Weather", "No data available."))
-        temp = cur.get("temperature")
-        wind = cur.get("windspeed")
-        code = cur.get("weathercode")
-        # quick code -> text map (minimal)
-        WMAP = {
-            0:"Clear", 1:"Mainly clear", 2:"Partly cloudy", 3:"Overcast",
-            45:"Fog", 48:"Depositing rime fog", 51:"Light drizzle", 53:"Drizzle", 55:"Heavy drizzle",
-            61:"Light rain", 63:"Rain", 65:"Heavy rain",
-            71:"Light snow", 73:"Snow", 75:"Heavy snow",
-            80:"Light showers", 81:"Showers", 82:"Heavy showers",
-            95:"Thunderstorm", 96:"Thunderstorm w/ hail", 99:"Severe thunderstorm"
-        }
-        cond = WMAP.get(code, "—")
-        unit_sym = "°F" if temp_unit == "fahrenheit" else "°C"
-        wind_sym = "mph" if wind_unit == "mph" else "m/s"
-        desc = (
-            f"Location: {display_name}\n"
-            f"Temperature: {temp} {unit_sym}\n"
-            f"Wind: {wind} {wind_sym}\n"
-            f"Conditions: {cond}\n"
-            f"{now_utc_iso()}"
-        )
-        await inter.followup.send(embed=emb("Weather", desc), ephemeral=True)
-    except RuntimeError as e:
-        await inter.followup.send(embed=emb("Weather", f"Fetch failed: {e}"), ephemeral=True)
-
-@tree.command(name="wiki", description="Short Wikipedia summary.")
-@app_commands.describe(query="Topic to search")
-@cooldown_medium
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
-async def wiki_cmd(inter: discord.Interaction, query: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
-        # first, get best title via opensearch
-        sr = await http_get_json("https://en.wikipedia.org/w/api.php", {
-            "action":"opensearch", "search":query, "limit":1, "namespace":0, "format":"json"
-        })
-        title = (sr[1][0] if isinstance(sr, list) and sr and len(sr) > 1 and sr[1] else "").replace(" ", "_")
-        if not title:
-            return await inter.followup.send(embed=emb("Wiki", "No results found."), ephemeral=True)
+        if scope.value == "guild":
+            if not GUILD_ID:
+                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
+            synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
+            return await inter.followup.send(embed=emb("Resync", f"Guild sync OK ({len(synced)} commands)."), ephemeral=True)
 
-        # then fetch summary
-        js = await http_get_json(f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}")
-        extract = js.get("extract") or "No summary."
-        url = js.get("content_urls", {}).get("desktop", {}).get("page", "")
-        if len(extract) > 1000:
-            extract = extract[:1000] + "…"
-        desc = f"{extract}\n\n{url}" if url else extract
-        await inter.followup.send(embed=emb("Wiki", desc), ephemeral=True)
-    except RuntimeError as e:
-        await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=True)
+        elif scope.value == "global":
+            synced = await tree.sync()
+            return await inter.followup.send(embed=emb("Resync", f"Global sync OK ({len(synced)} commands)."), ephemeral=True)
+
+        elif scope.value == "guild_clear":
+            if not GUILD_ID:
+                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
+            tree.clear_commands(guild=discord.Object(id=GUILD_ID))
+            tree.copy_global_to(guild=discord.Object(id=GUILD_ID))
+            synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
+            return await inter.followup.send(embed=emb("Resync", f"Cleared & copied global → guild ({len(synced)} commands)."), ephemeral=True)
+
+        else:
+            return await inter.followup.send(embed=emb("Resync", "Unknown scope."), ephemeral=True)
+
+    except Exception as e:
+        return await inter.followup.send(embed=emb("Resync", f"Failed: {e}"), ephemeral=True)
 
 # ===== unified error handling =====
 @tree.error
@@ -321,6 +298,5 @@ if __name__ == "__main__":
     try:
         client.run(TOKEN)
     finally:
-        # ensure HTTP session closes on shutdown
         if _http and not _http.closed:
             asyncio.run(_http.close())
