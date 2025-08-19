@@ -4,33 +4,26 @@ import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
+from urllib.parse import quote, quote_plus
 
-# ===== config via env =====
-TOKEN      = os.getenv("DISCORD_TOKEN", "").strip()
-OWNER_ID   = int(os.getenv("DISCORD_OWNER_ID", "0") or 0)
-GUILD_ID   = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
-
-ROLE_CHANGES_ID      = int(os.getenv("ROLE_CHANGES_ID", "0") or 0)
-ROLE_STATUS_ID       = int(os.getenv("ROLE_STATUS_ID", "0") or 0)
+TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", "0") or 0)
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
+ROLE_CHANGES_ID = int(os.getenv("ROLE_CHANGES_ID", "0") or 0)
+ROLE_STATUS_ID = int(os.getenv("ROLE_STATUS_ID", "0") or 0)
 ROLE_PICK_CHANNEL_ID = int(os.getenv("ROLE_PICK_CHANNEL_ID", "0") or 0)
-
-# Piped endpoints (your instance)
-PIPED_API_BASE      = os.getenv("PIPED_API_BASE", "https://piped.video/api/v1").rstrip("/")
+PIPED_API_BASE = os.getenv("PIPED_API_BASE", "https://piped.video/api/v1").rstrip("/")
 PIPED_FRONTEND_BASE = os.getenv("PIPED_FRONTEND_BASE", "https://piped.video").rstrip("/")
-
-# single place to change the theme color (lavender)
 LAVENDER = 0xB57EDC
 
-# ===== client (slash-only) =====
 intents = discord.Intents.default()
 intents.guilds = True
-client = commands.Bot(command_prefix="!", intents=intents)  # prefix unused; slash only
+client = commands.Bot(command_prefix="!", intents=intents)
 tree = client.tree
 
-# global HTTP session
 _http: aiohttp.ClientSession | None = None
+DEFAULT_HEADERS = {"User-Agent": "homelab-discord-bot/1.0 (+github.com/you)"}
 
-# ===== helpers =====
 def now_utc_iso():
     return discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
@@ -48,13 +41,11 @@ async def reply_embed(inter: discord.Interaction, title: str, desc: str, *, ephe
     else:
         await inter.response.send_message(embed=emb(title, desc), ephemeral=ephemeral)
 
-async def http_get_json(url: str, params: dict | None = None, timeout_sec: float = 8.0):
-    """Minimal JSON GET with sane timeouts and errors."""
+async def http_get_json(url: str, params: dict | None = None, timeout_sec: float = 10.0):
     global _http
-    if params is None:
-        params = {}
+    params = params or {}
     if _http is None or _http.closed:
-        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec))
+        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_sec), headers=DEFAULT_HEADERS)
     try:
         async with _http.get(url, params=params) as r:
             if r.status != 200:
@@ -78,7 +69,6 @@ def hhmmss(seconds: int | None) -> str:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
-# ===== role picker =====
 class RolePicker(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -127,20 +117,15 @@ async def send_role_picker_embed():
     e.set_footer(text=f"Last posted {now_utc_iso()}")
     await ch.send(embed=e, view=RolePicker())
 
-# ===== presence + sync + session =====
 @client.event
 async def on_ready():
-    await client.change_presence(
-        status=discord.Status.idle,
-        activity=discord.Activity(type=discord.ActivityType.watching, name="over homelab"),
-    )
+    await client.change_presence(status=discord.Status.idle, activity=discord.Activity(type=discord.ActivityType.watching, name="over homelab"))
     client.add_view(RolePicker())
     try:
         if GUILD_ID:
             await tree.sync(guild=discord.Object(id=GUILD_ID))
         else:
             await tree.sync()
-        print(f"Logged in as {client.user} — commands synced.")
     except Exception as e:
         print("Sync failed:", e)
 
@@ -150,11 +135,8 @@ async def on_close():
     if _http and not _http.closed:
         await _http.close()
 
-# ===== cooldowns =====
-cooldown_fast   = app_commands.checks.cooldown(1, 3.0)    # 1 use / 3s per user
-cooldown_medium = app_commands.checks.cooldown(2, 10.0)   # 2 uses / 10s per user
-
-# ===== commands =====
+cooldown_fast = app_commands.checks.cooldown(1, 3.0)
+cooldown_medium = app_commands.checks.cooldown(2, 10.0)
 
 @tree.command(name="rolesetup", description="Post the Notification Preferences role picker (owner only).")
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
@@ -170,12 +152,7 @@ async def rolesetup_cmd(inter: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def status_cmd(inter: discord.Interaction):
     u = client.user
-    desc = (
-        f"Bot: {u.mention if u else '—'}\n"
-        f"Presence: watching over homelab\n"
-        f"Latency: {round(client.latency * 1000)} ms\n"
-        f"{now_utc_iso()}"
-    )
+    desc = f"Bot: {u.mention if u else '—'}\nPresence: watching over homelab\nLatency: {round(client.latency * 1000)} ms\n{now_utc_iso()}"
     await reply_embed(inter, "Status", desc, ephemeral=True)
 
 @tree.command(name="purge", description="Delete a number of recent messages in this channel.")
@@ -194,62 +171,112 @@ async def purge_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def help_cmd(inter: discord.Interaction):
     lines = [
-        "/rolesetup — post role picker (owner only)",
         "/status — bot presence + latency",
         "/purge — delete recent messages (requires Manage Messages)",
-        "/yt <query> [limit] — search your Piped",
-        "/resync <scope> — refresh slash commands (owner only)",
-        "/help — this list",
+        "/yt <query> [limit] — search via Piped",
+        "/wiki <query> — short summary",
+        "/weather <place> [unit] — current weather",
+        "/rolesetup — post role picker (owner only)",
+        "/resync <scope> — refresh commands (owner only)",
     ]
     await reply_embed(inter, "Commands", "\n".join(lines), ephemeral=True)
 
-# ===== PIPED: /yt search =====
 @tree.command(name="yt", description="Search YouTube via your Piped instance.")
-@app_commands.describe(query="Search terms", limit="Max results (1–5, default 3)")
+@app_commands.describe(query="Search terms", limit="Max links (1–5, default 3)")
 @cooldown_medium
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Range[int, 1, 5] = 3):
     await inter.response.defer(ephemeral=True, thinking=True)
+    results_url = f"{PIPED_FRONTEND_BASE}/results?search_query={quote_plus(query)}"
+    lines = []
+    enriched = False
     try:
         data = await http_get_json(f"{PIPED_API_BASE}/search", {"q": query, "region": "US"})
-    except RuntimeError as e:
-        return await inter.followup.send(embed=emb("YouTube", f"Search failed: {e}"), ephemeral=True)
-
-    if not isinstance(data, list) or not data:
-        return await inter.followup.send(embed=emb("YouTube", "No results."), ephemeral=True)
-
-    # filter to videos only if mixed
-    videos = [x for x in data if (isinstance(x, dict) and (x.get("type") == "video" or "videoId" in x))]
-    videos = videos[:limit]
-
-    if not videos:
-        return await inter.followup.send(embed=emb("YouTube", "No video results."), ephemeral=True)
-
-    lines = []
-    for i, v in enumerate(videos, 1):
-        vid = v.get("videoId") or v.get("url", "").split("v=")[-1]
-        title = v.get("title", "Untitled")
-        ch = v.get("uploaderName") or v.get("uploader") or "Unknown"
-        dur = hhmmss(v.get("duration"))
-        watch = f"{PIPED_FRONTEND_BASE}/watch?v={vid}" if vid else PIPED_FRONTEND_BASE
-        lines.append(f"{i}. [{title}]({watch}) — {ch} — {dur}")
-
+        if isinstance(data, list) and data:
+            videos = [x for x in data if isinstance(x, dict) and (x.get("type") == "video" or "videoId" in x)]
+            for i, v in enumerate(videos[:limit], 1):
+                vid = v.get("videoId") or (v.get("url", "").split("v=")[-1] if v.get("url") else None)
+                title = v.get("title") or "Untitled"
+                ch = v.get("uploaderName") or v.get("uploader") or "Unknown"
+                dur = hhmmss(v.get("duration"))
+                watch = f"{PIPED_FRONTEND_BASE}/watch?v={vid}" if vid else results_url
+                lines.append(f"{i}. [{title}]({watch}) — {ch} — {dur}")
+            enriched = bool(lines)
+    except RuntimeError:
+        pass
+    if not enriched:
+        lines = [f"Open results: {results_url}"]
     await inter.followup.send(embed=emb("YouTube", "\n".join(lines)), ephemeral=True)
 
-# ===== RESYNC: fix missing/duplicate slash commands =====
+@tree.command(name="wiki", description="Short Wikipedia summary.")
+@app_commands.describe(query="Topic to search")
+@cooldown_medium
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def wiki_cmd(inter: discord.Interaction, query: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        sr = await http_get_json("https://en.wikipedia.org/w/api.php", {"action": "opensearch", "search": query, "limit": 1, "namespace": 0, "format": "json"})
+        title = (sr[1][0] if isinstance(sr, list) and len(sr) > 1 and sr[1] else "").strip()
+    except RuntimeError as e:
+        return await inter.followup.send(embed=emb("Wiki", f"Search failed: {e}"), ephemeral=True)
+    if not title:
+        return await inter.followup.send(embed=emb("Wiki", "No results."), ephemeral=True)
+    slug = quote(title.replace(" ", "_"), safe="")
+    try:
+        js = await http_get_json(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}")
+        extract = (js.get("extract") or "No summary.").strip()
+        url = js.get("content_urls", {}).get("desktop", {}).get("page", "")
+        if len(extract) > 1000:
+            extract = extract[:1000] + "…"
+        body = f"{extract}\n\n{url}" if url else extract
+        return await inter.followup.send(embed=emb("Wiki", body), ephemeral=True)
+    except RuntimeError as e:
+        return await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=True)
+
+@tree.command(name="weather", description="Current weather for a place.")
+@app_commands.describe(place="City or place name (e.g., Chicago, IL or London)", unit="Units: auto, metric, imperial")
+@app_commands.choices(unit=[app_commands.Choice(name="auto", value="auto"), app_commands.Choice(name="metric (°C, m/s)", value="metric"), app_commands.Choice(name="imperial (°F, mph)", value="imperial")])
+@cooldown_medium
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        geo = await http_get_json("https://geocoding-api.open-meteo.com/v1/search", {"name": place, "count": 1, "language": "en", "format": "json"})
+        if not geo or not geo.get("results"):
+            return await inter.followup.send(embed=emb("Weather", "Location not found."), ephemeral=True)
+        g0 = geo["results"][0]
+        lat, lon = g0["latitude"], g0["longitude"]
+        display_name = f"{g0.get('name','')} {g0.get('admin1','') or ''} {g0.get('country','') or ''}".strip()
+    except RuntimeError as e:
+        return await inter.followup.send(embed=emb("Weather", f"Geocoding failed: {e}"), ephemeral=True)
+    choice = (unit.value if unit else "auto")
+    temp_unit = "fahrenheit" if choice == "imperial" else ("celsius" if choice == "metric" else ("fahrenheit" if (g0.get("country_code","") or "") == "US" else "celsius"))
+    wind_unit = "mph" if temp_unit == "fahrenheit" else "ms"
+    try:
+        wx = await http_get_json("https://api.open-meteo.com/v1/forecast", {"latitude": lat, "longitude": lon, "current": "temperature_2m,weather_code,wind_speed_10m", "temperature_unit": temp_unit, "windspeed_unit": wind_unit, "timezone": "auto"})
+        cur = (wx.get("current") or {})
+        temp = cur.get("temperature_2m")
+        wind = cur.get("wind_speed_10m")
+        code = cur.get("weather_code")
+        WMAP = {0:"Clear", 1:"Mainly clear", 2:"Partly cloudy", 3:"Overcast", 45:"Fog", 48:"Rime fog", 51:"Light drizzle", 53:"Drizzle", 55:"Heavy drizzle", 61:"Light rain", 63:"Rain", 65:"Heavy rain", 71:"Light snow", 73:"Snow", 75:"Heavy snow", 80:"Light showers", 81:"Showers", 82:"Heavy showers", 95:"Thunderstorm", 96:"Thunderstorm w/ hail", 99:"Severe thunderstorm"}
+        cond = WMAP.get(code, "—")
+        unit_sym = "°F" if temp_unit == "fahrenheit" else "°C"
+        wind_sym = "mph" if wind_unit == "mph" else "m/s"
+        if temp is None or wind is None:
+            return await inter.followup.send(embed=emb("Weather", "No data available."), ephemeral=True)
+        desc = f"Location: {display_name}\nTemperature: {temp} {unit_sym}\nWind: {wind} {wind_sym}\nConditions: {cond}\n{now_utc_iso()}"
+        await inter.followup.send(embed=emb("Weather", desc), ephemeral=True)
+    except RuntimeError as e:
+        await inter.followup.send(embed=emb("Weather", f"Fetch failed: {e}"), ephemeral=True)
+
 @tree.command(name="resync", description="Refresh slash commands (owner only).")
 @app_commands.describe(scope="Where to sync")
-@app_commands.choices(scope=[
-    app_commands.Choice(name="guild", value="guild"),
-    app_commands.Choice(name="global", value="global"),
-    app_commands.Choice(name="guild-clear-then-global", value="guild_clear"),
-])
+@app_commands.choices(scope=[app_commands.Choice(name="guild", value="guild"), app_commands.Choice(name="global", value="global"), app_commands.Choice(name="guild-clear-then-global", value="guild_clear")])
 @cooldown_fast
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def resync_cmd(inter: discord.Interaction, scope: app_commands.Choice[str]):
     if not is_owner(inter):
         return await reply_embed(inter, "Denied", "Only the owner can do that.")
-
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
         if scope.value == "guild":
@@ -257,11 +284,9 @@ async def resync_cmd(inter: discord.Interaction, scope: app_commands.Choice[str]
                 return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
             synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
             return await inter.followup.send(embed=emb("Resync", f"Guild sync OK ({len(synced)} commands)."), ephemeral=True)
-
         elif scope.value == "global":
             synced = await tree.sync()
             return await inter.followup.send(embed=emb("Resync", f"Global sync OK ({len(synced)} commands)."), ephemeral=True)
-
         elif scope.value == "guild_clear":
             if not GUILD_ID:
                 return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
@@ -269,14 +294,11 @@ async def resync_cmd(inter: discord.Interaction, scope: app_commands.Choice[str]
             tree.copy_global_to(guild=discord.Object(id=GUILD_ID))
             synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
             return await inter.followup.send(embed=emb("Resync", f"Cleared & copied global → guild ({len(synced)} commands)."), ephemeral=True)
-
         else:
             return await inter.followup.send(embed=emb("Resync", "Unknown scope."), ephemeral=True)
-
     except Exception as e:
         return await inter.followup.send(embed=emb("Resync", f"Failed: {e}"), ephemeral=True)
 
-# ===== unified error handling =====
 @tree.error
 async def on_app_command_error(inter: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
@@ -289,9 +311,8 @@ async def on_app_command_error(inter: discord.Interaction, error: app_commands.A
         await reply_embed(inter, "Error", "Something went wrong.", ephemeral=True)
     except Exception:
         pass
-    raise error  # still log
+    raise error
 
-# ===== run =====
 if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("Set DISCORD_TOKEN")
