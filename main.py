@@ -189,6 +189,7 @@ async def help_cmd(inter: discord.Interaction):
         "/yt <query> [limit] — search via Piped",
         "/wiki <query> — short summary",
         "/weather <place> [unit] — current weather",
+        "/stock <symbol> — show stock price & chart",
         "/rolesetup — post role picker (owner only)",
         "/resync <scope> — refresh commands (owner only)",
     ]
@@ -413,16 +414,31 @@ def normalize_symbol(s: str) -> str:
         "MICROSOFT": "MSFT",
         "GOOGLE": "GOOGL",
         "AMAZON": "AMZN",
+        "FACEBOOK": "META",
+        "NVIDIA": "NVDA",
+        "NETFLIX": "NFLX",
+        "INTEL": "INTC",
     }
     s = s.strip().upper()
     s = fixes.get(s, s)
-    tickers = ["AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "NFLX", "AMD", "INTC"]
+    tickers = [
+        "AAPL",
+        "TSLA",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "NFLX",
+        "AMD",
+        "INTC",
+    ]
     if s in tickers:
         return s
     match = difflib.get_close_matches(s, tickers, n=1, cutoff=0.6)
     return match[0] if match else s
 
-async def fetch_price_and_chart(symbol: str):
+def fetch_price_and_chart(symbol: str):
     sym = normalize_symbol(symbol)
     end = dt.datetime.utcnow()
     start = end - dt.timedelta(days=32)
@@ -448,20 +464,21 @@ async def fetch_price_and_chart(symbol: str):
 
 @tree.command(name="stock", description="Show current price and chart for a stock")
 @app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
-async def stock(interaction: discord.Interaction, symbol: str):
-    await interaction.response.defer(thinking=True)
+async def stock(inter: discord.Interaction, symbol: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
     try:
         sym, last_price, img = await asyncio.to_thread(fetch_price_and_chart, symbol)
         if sym is None:
-            await interaction.followup.send(f"Couldn't find data for `{symbol}`.")
-            return
+            return await inter.followup.send(
+                embed=emb("Stock", f"Couldn't find data for `{symbol}`."), ephemeral=True
+            )
 
         file = discord.File(img, filename=f"{sym}.png")
-        embed = discord.Embed(title=f"{sym}", description=f"Current price: **${last_price:,.2f}**", color=0x5865F2)
+        embed = emb(f"{sym}", f"Current price: **${last_price:,.2f}**")
         embed.set_image(url=f"attachment://{sym}.png")
-        await interaction.followup.send(embed=embed, file=file)
+        await inter.followup.send(embed=embed, file=file, ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"Error: {e}")
+        await inter.followup.send(embed=emb("Stock", f"Error: {e}"), ephemeral=True)
 
 @tree.error
 async def on_app_command_error(inter: discord.Interaction, error: app_commands.AppCommandError):
