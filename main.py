@@ -10,8 +10,18 @@ import datetime as dt
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.ticker import FuncFormatter
+import pandas as pd
 import yfinance as yf
 import difflib
+
+try:  # optional candlestick support
+    import mplfinance as mpf
+    USE_CANDLES = True
+except Exception:  # pragma: no cover - best effort
+    mpf = None
+    USE_CANDLES = False
 
 
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
@@ -441,26 +451,87 @@ def normalize_symbol(s: str) -> str:
 def fetch_price_and_chart(symbol: str):
     sym = normalize_symbol(symbol)
     end = dt.datetime.utcnow()
-    start = end - dt.timedelta(days=32)
-
-    hist = yf.download(sym, start=start.date(), end=end.date(), interval="1d", progress=False, auto_adjust=True)
+    # fetch a bit more than 90 days to ensure enough data for MA20
+    hist = yf.download(
+        sym,
+        period="120d",
+        interval="1d",
+        progress=False,
+        auto_adjust=True,
+    )
     if hist is None or hist.empty:
-        return None, None, None
+        return None, None, None, None
 
+    # trim to last 90 days if available
+    hist = hist.tail(90)
+    hist["MA20"] = hist["Close"].rolling(20).mean()
+
+    # intraday for freshest price fallback
     intraday = yf.download(sym, period="1d", interval="1m", progress=False, auto_adjust=True)
-    last_price = float(intraday["Close"].dropna().iloc[-1]) if intraday is not None and not intraday.empty else float(hist["Close"].dropna().iloc[-1])
+    last_price = (
+        float(intraday["Close"].dropna().iloc[-1])
+        if intraday is not None and not intraday.empty
+        else float(hist["Close"].dropna().iloc[-1])
+    )
 
-    fig = plt.figure(figsize=(7, 3.8), dpi=200)
-    ax = plt.gca()
-    ax.plot(hist.index, hist["Close"], linewidth=2)
-    ax.set_title(f"{sym} • Last 1M")
-    ax.grid(True, alpha=0.3)
+    first_close = float(hist["Close"].dropna().iloc[0])
+    change_pct = ((last_price / first_close) - 1) * 100
+    arrow = "▲" if change_pct >= 0 else "▼"
+    title = f"{sym}  {arrow} {abs(change_pct):.2f}%  •  Last price ${last_price:,.2f}"
+
     buf = io.BytesIO()
-    plt.tight_layout()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
+    if USE_CANDLES and {"Open", "High", "Low", "Close"}.issubset(hist.columns):
+        addplots = [
+            mpf.make_addplot(hist["MA20"], color="orange", width=1.2),
+            mpf.make_addplot(
+                pd.Series(last_price, index=[hist.index[-1]]),
+                type="scatter",
+                color="white",
+                markersize=40,
+            ),
+        ]
+        fig, axes = mpf.plot(
+            hist,
+            type="candle",
+            style="charcoal",
+            addplot=addplots,
+            returnfig=True,
+            figsize=(7, 3.8),
+        )
+        ax = axes[0]
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=8)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"${x:,.2f}"))
+        ax.set_title(title)
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.style.use("dark_background")
+        fig, ax = plt.subplots(figsize=(7, 3.8), dpi=200)
+        ax.plot(hist.index, hist["Close"], color="#4CB391", linewidth=2)
+        ax.fill_between(hist.index, hist["Close"], color="#4CB391", alpha=0.2)
+        ax.plot(hist.index, hist["MA20"], color="#FFE066", linewidth=1.5)
+        ax.scatter(
+            hist.index[-1],
+            last_price,
+            color="white",
+            edgecolors="black",
+            zorder=5,
+            s=20,
+        )
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=8)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"${x:,.2f}"))
+        ax.grid(color="gray", alpha=0.3)
+        ax.set_title(title)
+        fig.tight_layout()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+
     buf.seek(0)
-    return sym, last_price, buf
+    return sym, last_price, change_pct, buf
 
 @tree.command(name="stock", description="Show current price and chart for a stock")
 @app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
@@ -470,14 +541,18 @@ def fetch_price_and_chart(symbol: str):
 async def stock(inter: discord.Interaction, symbol: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
-        sym, last_price, img = await asyncio.to_thread(fetch_price_and_chart, symbol)
+        sym, last_price, change_pct, img = await asyncio.to_thread(
+            fetch_price_and_chart, symbol
+        )
         if sym is None:
             return await inter.followup.send(
                 embed=emb("Stock", f"Couldn't find data for `{symbol}`."), ephemeral=True
             )
 
+        arrow = "▲" if change_pct >= 0 else "▼"
+        title = f"{sym}  {arrow} {abs(change_pct):.2f}%  •  Last price ${last_price:,.2f}"
         file = discord.File(img, filename=f"{sym}.png")
-        embed = emb(f"{sym}", f"Current price: **${last_price:,.2f}**")
+        embed = emb(title, "")
         embed.set_image(url=f"attachment://{sym}.png")
         await inter.followup.send(embed=embed, file=file, ephemeral=True)
     except Exception as e:
