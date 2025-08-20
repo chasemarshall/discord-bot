@@ -233,6 +233,99 @@ async def wiki_cmd(inter: discord.Interaction, query: str):
     except RuntimeError as e:
         return await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=True)
 
+
+class WeatherStateButton(discord.ui.Button):
+    def __init__(self, g: dict, choice: str):
+        label = g.get("admin1") or "Unknown"
+        super().__init__(label=label, style=discord.ButtonStyle.secondary)
+        self.g = g
+        self.choice = choice
+
+    async def callback(self, inter: discord.Interaction):
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await send_weather_from_geo(inter, self.g, self.choice, edit=True)
+
+
+class WeatherStateView(discord.ui.View):
+    def __init__(self, options: list[dict], choice: str):
+        super().__init__(timeout=30)
+        for g in options:
+            self.add_item(WeatherStateButton(g, choice))
+
+
+async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: str, *, edit: bool = False):
+    lat, lon = g0["latitude"], g0["longitude"]
+    display_name = f"{g0.get('name','')} {g0.get('admin1','') or ''} {g0.get('country','') or ''}".strip()
+    temp_unit = "fahrenheit" if choice == "imperial" else ("celsius" if choice == "metric" else ("fahrenheit" if (g0.get("country_code","") or "") == "US" else "celsius"))
+    wind_unit = "mph" if temp_unit == "fahrenheit" else "ms"
+    try:
+        wx = await http_get_json(
+            "https://api.open-meteo.com/v1/forecast",
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,weather_code,wind_speed_10m",
+                "temperature_unit": temp_unit,
+                "windspeed_unit": wind_unit,
+                "timezone": "auto",
+            },
+        )
+        cur = (wx.get("current") or {})
+        temp = cur.get("temperature_2m")
+        wind = cur.get("wind_speed_10m")
+        code = cur.get("weather_code")
+        WMAP = {
+            0: "Clear",
+            1: "Mainly clear",
+            2: "Partly cloudy",
+            3: "Overcast",
+            45: "Fog",
+            48: "Rime fog",
+            51: "Light drizzle",
+            53: "Drizzle",
+            55: "Heavy drizzle",
+            61: "Light rain",
+            63: "Rain",
+            65: "Heavy rain",
+            71: "Light snow",
+            73: "Snow",
+            75: "Heavy snow",
+            80: "Light showers",
+            81: "Showers",
+            82: "Heavy showers",
+            95: "Thunderstorm",
+            96: "Thunderstorm w/ hail",
+            99: "Severe thunderstorm",
+        }
+        cond = WMAP.get(code, "—")
+        unit_sym = "°F" if temp_unit == "fahrenheit" else "°C"
+        wind_sym = "mph" if wind_unit == "mph" else "m/s"
+        if temp is None or wind is None:
+            e = emb("Weather", "No data available.")
+            if edit:
+                await inter.edit_original_response(embed=e, view=None)
+            else:
+                await inter.followup.send(embed=e, ephemeral=True)
+            return
+        desc = (
+            f"Location: {display_name}\n"
+            f"Temperature: {temp} {unit_sym}\n"
+            f"Wind: {wind} {wind_sym}\n"
+            f"Conditions: {cond}\n{now_utc_iso()}"
+        )
+        e = emb("Weather", desc)
+        if edit:
+            await inter.edit_original_response(embed=e, view=None)
+        else:
+            await inter.followup.send(embed=e, ephemeral=True)
+    except RuntimeError as ex:
+        e = emb("Weather", f"Fetch failed: {ex}")
+        if edit:
+            await inter.edit_original_response(embed=e, view=None)
+        else:
+            await inter.followup.send(embed=e, ephemeral=True)
+
+
 @tree.command(name="weather", description="Current weather for a place.")
 @app_commands.describe(place="City or place name (e.g., Chicago, IL or London)", unit="Units: auto, metric, imperial")
 @app_commands.choices(unit=[app_commands.Choice(name="auto", value="auto"), app_commands.Choice(name="metric (°C, m/s)", value="metric"), app_commands.Choice(name="imperial (°F, mph)", value="imperial")])
@@ -241,33 +334,28 @@ async def wiki_cmd(inter: discord.Interaction, query: str):
 async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
-        geo = await http_get_json("https://geocoding-api.open-meteo.com/v1/search", {"name": place, "count": 1, "language": "en", "format": "json"})
-        if not geo or not geo.get("results"):
+        geo = await http_get_json(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            {"name": place, "count": 10, "language": "en", "format": "json"},
+        )
+        results = geo.get("results") if geo else None
+        if not results:
             return await inter.followup.send(embed=emb("Weather", "Location not found."), ephemeral=True)
-        g0 = geo["results"][0]
-        lat, lon = g0["latitude"], g0["longitude"]
-        display_name = f"{g0.get('name','')} {g0.get('admin1','') or ''} {g0.get('country','') or ''}".strip()
     except RuntimeError as e:
         return await inter.followup.send(embed=emb("Weather", f"Geocoding failed: {e}"), ephemeral=True)
-    choice = (unit.value if unit else "auto")
-    temp_unit = "fahrenheit" if choice == "imperial" else ("celsius" if choice == "metric" else ("fahrenheit" if (g0.get("country_code","") or "") == "US" else "celsius"))
-    wind_unit = "mph" if temp_unit == "fahrenheit" else "ms"
-    try:
-        wx = await http_get_json("https://api.open-meteo.com/v1/forecast", {"latitude": lat, "longitude": lon, "current": "temperature_2m,weather_code,wind_speed_10m", "temperature_unit": temp_unit, "windspeed_unit": wind_unit, "timezone": "auto"})
-        cur = (wx.get("current") or {})
-        temp = cur.get("temperature_2m")
-        wind = cur.get("wind_speed_10m")
-        code = cur.get("weather_code")
-        WMAP = {0:"Clear", 1:"Mainly clear", 2:"Partly cloudy", 3:"Overcast", 45:"Fog", 48:"Rime fog", 51:"Light drizzle", 53:"Drizzle", 55:"Heavy drizzle", 61:"Light rain", 63:"Rain", 65:"Heavy rain", 71:"Light snow", 73:"Snow", 75:"Heavy snow", 80:"Light showers", 81:"Showers", 82:"Heavy showers", 95:"Thunderstorm", 96:"Thunderstorm w/ hail", 99:"Severe thunderstorm"}
-        cond = WMAP.get(code, "—")
-        unit_sym = "°F" if temp_unit == "fahrenheit" else "°C"
-        wind_sym = "mph" if wind_unit == "mph" else "m/s"
-        if temp is None or wind is None:
-            return await inter.followup.send(embed=emb("Weather", "No data available."), ephemeral=True)
-        desc = f"Location: {display_name}\nTemperature: {temp} {unit_sym}\nWind: {wind} {wind_sym}\nConditions: {cond}\n{now_utc_iso()}"
-        await inter.followup.send(embed=emb("Weather", desc), ephemeral=True)
-    except RuntimeError as e:
-        await inter.followup.send(embed=emb("Weather", f"Fetch failed: {e}"), ephemeral=True)
+
+    choice = unit.value if unit else "auto"
+    us_matches = [g for g in results if g.get("country_code") == "US" and (g.get("name", "").lower() == place.lower())]
+    if len(us_matches) > 1:
+        view = WeatherStateView(us_matches, choice)
+        return await inter.followup.send(
+            embed=emb("Weather", "Multiple matches found. Choose a state."),
+            view=view,
+            ephemeral=True,
+        )
+
+    g0 = us_matches[0] if us_matches else results[0]
+    await send_weather_from_geo(inter, g0, choice)
 
 @tree.command(name="resync", description="Refresh slash commands (owner only).")
 @app_commands.describe(scope="Where to sync")
