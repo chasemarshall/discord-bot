@@ -249,6 +249,7 @@ class WeatherStateButton(discord.ui.Button):
         self.choice = choice
 
     async def callback(self, inter: discord.Interaction):
+        # Defer so we have time to fetch weather data before editing the message
         await inter.response.defer()
         await send_weather_from_geo(inter, self.g, self.choice, edit=True)
 
@@ -311,7 +312,7 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
         if temp is None or wind is None:
             e = emb("Weather", "No data available.")
             if edit:
-                await inter.message.edit(embed=e, view=None)
+                await inter.followup.edit_message(inter.message.id, embed=e, view=None)
             else:
                 await inter.followup.send(embed=e, ephemeral=True)
             return
@@ -323,13 +324,13 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
         )
         e = emb("Weather", desc)
         if edit:
-            await inter.message.edit(embed=e, view=None)
+            await inter.followup.edit_message(inter.message.id, embed=e, view=None)
         else:
             await inter.followup.send(embed=e, ephemeral=True)
     except RuntimeError as ex:
         e = emb("Weather", f"Fetch failed: {ex}")
         if edit:
-            await inter.message.edit(embed=e, view=None)
+            await inter.followup.edit_message(inter.message.id, embed=e, view=None)
         else:
             await inter.followup.send(embed=e, ephemeral=True)
 
