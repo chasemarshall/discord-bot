@@ -188,6 +188,28 @@ async def purge_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1
     deleted = await inter.channel.purge(limit=count, bulk=True)  # type: ignore
     await inter.followup.send(embed=emb("Purge", f"Deleted {len(deleted)} messages."), ephemeral=True)
 
+@tree.command(name="nuke", description="Bulk delete messages in phases of 100 (max 1000).")
+@app_commands.describe(count="How many messages to delete (1–1000)")
+@cooldown_medium
+@app_commands.default_permissions(manage_messages=True, use_application_commands=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def nuke_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1, 1000]):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    remaining = count
+    total = 0
+    while remaining > 0:
+        chunk = min(100, remaining)
+        deleted = await inter.channel.purge(limit=chunk, bulk=True)  # type: ignore
+        num = len(deleted)
+        total += num
+        remaining -= num
+        if num < chunk:
+            break
+        if remaining > 0:
+            await asyncio.sleep(1)
+    await inter.followup.send(embed=emb("Nuke", f"Deleted {total} messages."), ephemeral=True)
+
 @tree.command(name="help", description="Show available commands.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
@@ -196,6 +218,7 @@ async def help_cmd(inter: discord.Interaction):
     lines = [
         "/status — bot presence + latency",
         "/purge — delete recent messages (requires Manage Messages)",
+        "/nuke — bulk delete up to 1000 messages (requires Manage Messages)",
         "/yt <query> [limit] — search via Piped",
         "/wiki <query> — short summary",
         "/avatar [user] — show user's avatar",
