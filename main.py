@@ -121,13 +121,16 @@ async def send_role_picker_embed():
 async def on_ready():
     await client.change_presence(status=discord.Status.idle, activity=discord.Activity(type=discord.ActivityType.watching, name="over homelab"))
     client.add_view(RolePicker())
-    try:
-        if GUILD_ID:
-            await tree.sync(guild=discord.Object(id=GUILD_ID))
-        else:
-            await tree.sync()
-    except Exception as e:
-        print("Sync failed:", e)
+    if not getattr(client, "synced", False):
+        try:
+            if GUILD_ID:
+                synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
+            else:
+                synced = await tree.sync()
+            print(f"Synced {len(synced)} command(s)")
+            client.synced = True
+        except Exception as e:
+            print("Sync failed:", e)
 
 @client.event
 async def on_close():
