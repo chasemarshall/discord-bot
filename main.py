@@ -198,6 +198,8 @@ async def help_cmd(inter: discord.Interaction):
         "/purge — delete recent messages (requires Manage Messages)",
         "/yt <query> [limit] — search via Piped",
         "/wiki <query> — short summary",
+        "/avatar [user] — show user's avatar",
+        "/define <word> — dictionary lookup",
         "/weather <place> [unit] — current weather",
         "/stock <symbol> — show stock price & chart",
         "/rolesetup — post role picker (owner only)",
@@ -258,6 +260,45 @@ async def wiki_cmd(inter: discord.Interaction, query: str):
         return await inter.followup.send(embed=emb("Wiki", body), ephemeral=True)
     except RuntimeError as e:
         return await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=True)
+
+
+@tree.command(name="avatar", description="Show a user's avatar.")
+@app_commands.describe(user="User to display")
+@cooldown_fast
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def avatar_cmd(inter: discord.Interaction, user: discord.User | None = None):
+    target = user or inter.user
+    embed = emb(f"Avatar | {target.display_name}", "")
+    embed.set_image(url=target.display_avatar.url)
+    await inter.response.send_message(embed=embed, ephemeral=True)
+
+
+@tree.command(name="define", description="Look up a word in the dictionary.")
+@app_commands.describe(word="Word to define")
+@cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def define_cmd(inter: discord.Interaction, word: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        data = await http_get_json(
+            f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word)}"
+        )
+        if not isinstance(data, list) or not data:
+            raise RuntimeError("No definition found")
+        first = data[0]
+        meanings = first.get("meanings") or []
+        meaning = meanings[0] if meanings else {}
+        part = meaning.get("partOfSpeech", "")
+        defs = meaning.get("definitions") or []
+        definition = defs[0].get("definition") if defs else "No definition found."
+        desc = f"{definition}"
+        if part:
+            desc = f"*{part}* — {desc}"
+        await inter.followup.send(embed=emb(f"Define | {word}", desc), ephemeral=True)
+    except RuntimeError as e:
+        await inter.followup.send(embed=emb("Define", f"Error: {e}"), ephemeral=True)
 
 
 class WeatherStateButton(discord.ui.Button):
@@ -460,7 +501,7 @@ def fetch_price_and_chart(symbol: str):
         auto_adjust=True,
     )
     if hist is None or hist.empty:
-        return None, None, None, None
+        return None, None, None, None, None
 
     if isinstance(hist.columns, pd.MultiIndex):
         hist.columns = hist.columns.get_level_values(0)
@@ -469,6 +510,8 @@ def fetch_price_and_chart(symbol: str):
     hist = hist.tail(90).copy()
     hist["MA20"] = hist["Close"].rolling(20).mean()
 
+    closes = hist["Close"].dropna()
+
     # intraday for freshest price fallback
     intraday = yf.download(sym, period="1d", interval="1m", progress=False, auto_adjust=True)
     if intraday is not None and not intraday.empty:
@@ -476,12 +519,16 @@ def fetch_price_and_chart(symbol: str):
             intraday.columns = intraday.columns.get_level_values(0)
         last_price = float(intraday["Close"].dropna().iloc[-1])
     else:
-        last_price = float(hist["Close"].dropna().iloc[-1])
+        last_price = float(closes.iloc[-1])
 
-    first_close = float(hist["Close"].dropna().iloc[0])
-    change_pct = ((last_price / first_close) - 1) * 100
-    arrow = "▲" if change_pct >= 0 else "▼"
-    title = f"{sym}  {arrow} {abs(change_pct):.2f}%  •  Last price ${last_price:,.2f}"
+    # daily and monthly change percentages
+    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else last_price
+    month_close = float(closes.iloc[-21]) if len(closes) >= 21 else closes.iloc[0]
+    day_change_pct = ((last_price / prev_close) - 1) * 100 if prev_close else 0.0
+    month_change_pct = ((last_price / month_close) - 1) * 100 if month_close else 0.0
+
+    arrow = "▲" if day_change_pct >= 0 else "▼"
+    title = f"{sym}  {arrow} {abs(day_change_pct):.2f}%  •  Last price ${last_price:,.2f}"
 
     buf = io.BytesIO()
     if USE_CANDLES and {"Open", "High", "Low", "Close"}.issubset(hist.columns):
@@ -535,7 +582,7 @@ def fetch_price_and_chart(symbol: str):
         plt.close(fig)
 
     buf.seek(0)
-    return sym, last_price, change_pct, buf
+    return sym, last_price, day_change_pct, month_change_pct, buf
 
 @tree.command(name="stock", description="Show current price and chart for a stock")
 @app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
@@ -545,7 +592,7 @@ def fetch_price_and_chart(symbol: str):
 async def stock(inter: discord.Interaction, symbol: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
-        sym, last_price, change_pct, img = await asyncio.to_thread(
+        sym, last_price, day_change_pct, month_change_pct, img = await asyncio.to_thread(
             fetch_price_and_chart, symbol
         )
         if sym is None:
@@ -553,10 +600,17 @@ async def stock(inter: discord.Interaction, symbol: str):
                 embed=emb("Stock", f"Couldn't find data for `{symbol}`."), ephemeral=True
             )
 
-        arrow = "▲" if change_pct >= 0 else "▼"
-        title = f"{sym}  {arrow} {abs(change_pct):.2f}%  •  Last price ${last_price:,.2f}"
+        arrow_day = "▲" if day_change_pct >= 0 else "▼"
+        arrow_month = "▲" if month_change_pct >= 0 else "▼"
+        desc = (
+            f"**Last Price:** ${last_price:,.2f}\n"
+            f"**Day Change:** {arrow_day} {abs(day_change_pct):.2f}%\n"
+            f"**Month Change:** {arrow_month} {abs(month_change_pct):.2f}%\n"
+            "🟢 Price • 🟡 20-day moving average • ⚪ Latest price"
+            f"\n\nhttps://www.tradingview.com/symbols/{sym}"
+        )
         file = discord.File(img, filename=f"{sym}.png")
-        embed = emb(title, "")
+        embed = emb(f"Stocks | {sym}", desc)
         embed.set_image(url=f"attachment://{sym}.png")
         await inter.followup.send(embed=embed, file=file, ephemeral=True)
     except Exception as e:
