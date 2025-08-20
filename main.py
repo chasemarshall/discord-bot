@@ -464,6 +464,9 @@ def fetch_price_and_chart(symbol: str):
 
 @tree.command(name="stock", description="Show current price and chart for a stock")
 @app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
+@cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def stock(inter: discord.Interaction, symbol: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
