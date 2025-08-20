@@ -8,7 +8,7 @@ from urllib.parse import quote, quote_plus
 
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", "0") or 0)
-GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "1395516484859723867") or 0)
 ROLE_CHANGES_ID = int(os.getenv("ROLE_CHANGES_ID", "0") or 0)
 ROLE_STATUS_ID = int(os.getenv("ROLE_STATUS_ID", "0") or 0)
 ROLE_PICK_CHANNEL_ID = int(os.getenv("ROLE_PICK_CHANNEL_ID", "0") or 0)
