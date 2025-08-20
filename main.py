@@ -5,6 +5,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from urllib.parse import quote, quote_plus
+import io
+import datetime as dt
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import yfinance as yf
+import difflib
+
 
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", "0") or 0)
@@ -419,3 +427,69 @@ if __name__ == "__main__":
     finally:
         if _http and not _http.closed:
             asyncio.run(_http.close())
+
+
+# quick fuzzy ticker autocorrect
+def normalize_symbol(s: str) -> str:
+    s = s.strip().upper()
+    tickers = ["AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "NFLX", "AMD", "INTC"]
+    if s in tickers:
+        return s
+    match = difflib.get_close_matches(s, tickers, n=1, cutoff=0.6)
+    return match[0] if match else s
+
+def _normalize_symbol(s: str) -> str:
+    # simple autocorrect for common mistakes
+    fixes = {
+        "APPL": "AAPL",
+        "TESLA": "TSLA",
+        "MICROSOFT": "MSFT",
+        "GOOGLE": "GOOGL",
+        "AMAZON": "AMZN"
+    }
+    s = s.strip().upper()
+    return fixes.get(s, s)
+
+async def fetch_price_and_chart(symbol: str):
+    sym = _normalize_symbol(symbol)
+    end = dt.datetime.utcnow()
+    start = end - dt.timedelta(days=32)
+
+    hist = yf.download(sym, start=start.date(), end=end.date(), interval="1d",
+                       progress=False, auto_adjust=True)
+    if hist is None or hist.empty:
+        return None, None, None
+
+    intraday = yf.download(sym, period="1d", interval="1m",
+                           progress=False, auto_adjust=True)
+    last_price = float(intraday["Close"].dropna().iloc[-1]) if intraday is not None and not intraday.empty else float(hist["Close"].dropna().iloc[-1])
+
+    fig = plt.figure(figsize=(7, 3.8), dpi=200)
+    ax = plt.gca()
+    ax.plot(hist.index, hist["Close"], linewidth=2)
+    ax.set_title(f"{sym} • Last 1M")
+    ax.grid(True, alpha=0.3)
+    buf = io.BytesIO()
+    plt.tight_layout()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return sym, last_price, buf
+
+@app_commands.command(name="stock", description="Show current price and chart for a stock")
+@app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
+async def stock(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(thinking=True)
+    try:
+        sym, last_price, img = await asyncio.to_thread(fetch_price_and_chart, symbol)
+        if sym is None:
+            await interaction.followup.send(f"Couldn't find data for `{symbol}`.")
+            return
+
+        file = discord.File(img, filename=f"{sym}.png")
+        embed = discord.Embed(title=f"{sym}", description=f"Current price: **${last_price:,.2f}**", color=0x5865F2)
+        embed.set_image(url=f"attachment://{sym}.png")
+        await interaction.followup.send(embed=embed, file=file)
+    except Exception as e:
+        await interaction.followup.send(f"Error: {e}")
+
