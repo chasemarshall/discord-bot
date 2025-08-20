@@ -149,6 +149,7 @@ async def rolesetup_cmd(inter: discord.Interaction):
 
 @tree.command(name="status", description="Bot presence and latency.")
 @cooldown_fast
+@app_commands.default_permissions(use_application_commands=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def status_cmd(inter: discord.Interaction):
     u = client.user
@@ -158,7 +159,7 @@ async def status_cmd(inter: discord.Interaction):
 @tree.command(name="purge", description="Delete a number of recent messages in this channel.")
 @app_commands.describe(count="How many messages to delete (1–100)")
 @cooldown_medium
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(manage_messages=True, use_application_commands=True)
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def purge_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1, 100]):
@@ -168,6 +169,7 @@ async def purge_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1
 
 @tree.command(name="help", description="Show available commands.")
 @cooldown_fast
+@app_commands.default_permissions(use_application_commands=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def help_cmd(inter: discord.Interaction):
     lines = [
@@ -184,6 +186,7 @@ async def help_cmd(inter: discord.Interaction):
 @tree.command(name="yt", description="Search YouTube via your Piped instance.")
 @app_commands.describe(query="Search terms", limit="Max links (1–5, default 3)")
 @cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Range[int, 1, 5] = 3):
     await inter.response.defer(ephemeral=True, thinking=True)
@@ -211,6 +214,7 @@ async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Ran
 @tree.command(name="wiki", description="Short Wikipedia summary.")
 @app_commands.describe(query="Topic to search")
 @cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def wiki_cmd(inter: discord.Interaction, query: str):
     await inter.response.defer(ephemeral=True, thinking=True)
@@ -330,6 +334,7 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
 @app_commands.describe(place="City or place name (e.g., Chicago, IL or London)", unit="Units: auto, metric, imperial")
 @app_commands.choices(unit=[app_commands.Choice(name="auto", value="auto"), app_commands.Choice(name="metric (°C, m/s)", value="metric"), app_commands.Choice(name="imperial (°F, mph)", value="imperial")])
 @cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
     await inter.response.defer(ephemeral=True, thinking=True)
