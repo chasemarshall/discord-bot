@@ -177,38 +177,95 @@ async def status_cmd(inter: discord.Interaction):
     desc = f"Bot: {u.mention if u else '—'}\nPresence: watching over homelab\nLatency: {round(client.latency * 1000)} ms\n{now_utc_iso()}"
     await reply_embed(inter, "Status", desc, ephemeral=True)
 
-@tree.command(name="purge", description="Delete a number of recent messages in this channel.")
-@app_commands.describe(count="How many messages to delete (1–100)")
+@tree.command(name="purge", description="Bulk delete messages with optional filters.")
+@app_commands.describe(
+    amount="Max messages to scan (1–5000, default 200)",
+    contains="Only delete messages containing this text",
+    from_user="Only delete messages from this user",
+    bots_only="Only delete messages sent by bots",
+    dry_run="Show what would be deleted without removing"
+)
 @cooldown_medium
 @app_commands.default_permissions(manage_messages=True, use_application_commands=True)
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
-async def purge_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1, 100]):
+async def purge_cmd(
+    inter: discord.Interaction,
+    amount: app_commands.Range[int, 1, 5000] = 200,
+    contains: str | None = None,
+    from_user: discord.User | None = None,
+    bots_only: bool = False,
+    dry_run: bool = False,
+):
     await inter.response.defer(ephemeral=True, thinking=True)
-    deleted = await inter.channel.purge(limit=count, bulk=True)  # type: ignore
-    await inter.followup.send(embed=emb("Purge", f"Deleted {len(deleted)} messages."), ephemeral=True)
+    try:
+        channel = inter.channel
+        if not inter.guild or not isinstance(channel, discord.TextChannel):
+            return await inter.followup.send(
+                embed=emb("Purge", "This only works in server text channels."),
+                ephemeral=True,
+            )
 
-@tree.command(name="nuke", description="Bulk delete messages in phases of 100 (max 1000).")
-@app_commands.describe(count="How many messages to delete (1–1000)")
-@cooldown_medium
-@app_commands.default_permissions(manage_messages=True, use_application_commands=True)
-@app_commands.checks.has_permissions(manage_messages=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
-async def nuke_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1, 1000]):
-    await inter.response.defer(ephemeral=True, thinking=True)
-    remaining = count
-    total = 0
-    while remaining > 0:
-        chunk = min(100, remaining)
-        deleted = await inter.channel.purge(limit=chunk, bulk=True)  # type: ignore
-        num = len(deleted)
-        total += num
-        remaining -= num
-        if num < chunk:
-            break
-        if remaining > 0:
-            await asyncio.sleep(1)
-    await inter.followup.send(embed=emb("Nuke", f"Deleted {total} messages."), ephemeral=True)
+        scanned_msgs = [m async for m in channel.history(limit=amount)]
+        scanned = len(scanned_msgs)
+        substr = contains.lower() if contains else None
+        targets: list[discord.Message] = []
+        for m in scanned_msgs:
+            if m.pinned or m.is_system():
+                continue
+            if substr and substr not in m.content.lower():
+                continue
+            if from_user and m.author.id != from_user.id:
+                continue
+            if bots_only and not m.author.bot:
+                continue
+            targets.append(m)
+
+        cutoff = discord.utils.utcnow() - dt.timedelta(days=14)
+        recent = [m for m in targets if m.created_at > cutoff]
+        old = [m for m in targets if m.created_at <= cutoff]
+
+        reason = f"/purge by {inter.user}"
+        bulk_deleted = 0
+        old_deleted = 0
+
+        if not dry_run:
+            for i in range(0, len(recent), 100):
+                chunk = recent[i:i + 100]
+                try:
+                    await channel.delete_messages(chunk, reason=reason)
+                    bulk_deleted += len(chunk)
+                except discord.HTTPException:
+                    await asyncio.sleep(2.0)
+                    try:
+                        await channel.delete_messages(chunk, reason=reason)
+                        bulk_deleted += len(chunk)
+                    except discord.HTTPException:
+                        pass
+                await asyncio.sleep(0.25)
+
+            for m in old:
+                try:
+                    await m.delete(reason=reason)
+                    old_deleted += 1
+                    await asyncio.sleep(0.85)
+                except discord.HTTPException:
+                    await asyncio.sleep(1.75)
+        else:
+            bulk_deleted = len(recent)
+            old_deleted = len(old)
+
+        note = " This may take a while." if amount > 1000 else ""
+        if dry_run:
+            desc = f"Would purge {bulk_deleted} (bulk) + {old_deleted} (old) out of {scanned} scanned{note}"
+        else:
+            desc = f"Purged {bulk_deleted} (bulk) + {old_deleted} (old) out of {scanned} scanned{note}"
+        await inter.followup.send(embed=emb("Purge", desc), ephemeral=True)
+    except Exception:
+        await inter.followup.send(
+            embed=emb("Purge", "Something went wrong while purging."),
+            ephemeral=True,
+        )
 
 @tree.command(name="help", description="Show available commands.")
 @cooldown_fast
@@ -217,8 +274,7 @@ async def nuke_cmd(inter: discord.Interaction, count: app_commands.Range[int, 1,
 async def help_cmd(inter: discord.Interaction):
     lines = [
         "/status — bot presence + latency",
-        "/purge — delete recent messages (requires Manage Messages)",
-        "/nuke — bulk delete up to 1000 messages (requires Manage Messages)",
+        "/purge — bulk delete messages with filters (requires Manage Messages)",
         "/yt <query> [limit] — search via Piped",
         "/wiki <query> — short summary",
         "/avatar [user] — show user's avatar",
