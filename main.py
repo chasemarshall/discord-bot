@@ -462,17 +462,21 @@ def fetch_price_and_chart(symbol: str):
     if hist is None or hist.empty:
         return None, None, None, None
 
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = hist.columns.get_level_values(0)
+
     # trim to last 90 days if available
-    hist = hist.tail(90)
+    hist = hist.tail(90).copy()
     hist["MA20"] = hist["Close"].rolling(20).mean()
 
     # intraday for freshest price fallback
     intraday = yf.download(sym, period="1d", interval="1m", progress=False, auto_adjust=True)
-    last_price = (
-        float(intraday["Close"].dropna().iloc[-1])
-        if intraday is not None and not intraday.empty
-        else float(hist["Close"].dropna().iloc[-1])
-    )
+    if intraday is not None and not intraday.empty:
+        if isinstance(intraday.columns, pd.MultiIndex):
+            intraday.columns = intraday.columns.get_level_values(0)
+        last_price = float(intraday["Close"].dropna().iloc[-1])
+    else:
+        last_price = float(hist["Close"].dropna().iloc[-1])
 
     first_close = float(hist["Close"].dropna().iloc[0])
     change_pct = ((last_price / first_close) - 1) * 100
