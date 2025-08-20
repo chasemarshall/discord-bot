@@ -249,7 +249,7 @@ class WeatherStateButton(discord.ui.Button):
         self.choice = choice
 
     async def callback(self, inter: discord.Interaction):
-        await inter.response.defer(ephemeral=True, thinking=True)
+        await inter.response.defer()
         await send_weather_from_geo(inter, self.g, self.choice, edit=True)
 
 
@@ -262,7 +262,8 @@ class WeatherStateView(discord.ui.View):
 
 async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: str, *, edit: bool = False):
     lat, lon = g0["latitude"], g0["longitude"]
-    display_name = f"{g0.get('name','')} {g0.get('admin1','') or ''} {g0.get('country','') or ''}".strip()
+    parts = [g0.get("name", ""), g0.get("admin1") or "", g0.get("country") or ""]
+    display_name = ", ".join(p for p in parts if p)
     temp_unit = "fahrenheit" if choice == "imperial" else ("celsius" if choice == "metric" else ("fahrenheit" if (g0.get("country_code","") or "") == "US" else "celsius"))
     wind_unit = "mph" if temp_unit == "fahrenheit" else "ms"
     try:
@@ -310,25 +311,25 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
         if temp is None or wind is None:
             e = emb("Weather", "No data available.")
             if edit:
-                await inter.edit_original_response(embed=e, view=None)
+                await inter.message.edit(embed=e, view=None)
             else:
                 await inter.followup.send(embed=e, ephemeral=True)
             return
         desc = (
-            f"Location: {display_name}\n"
-            f"Temperature: {temp} {unit_sym}\n"
-            f"Wind: {wind} {wind_sym}\n"
-            f"Conditions: {cond}\n{now_utc_iso()}"
+            f"Location - {display_name}\n"
+            f"Temperature - {temp} {unit_sym}\n"
+            f"Wind - {wind} {wind_sym}\n"
+            f"Conditions - {cond}\n{now_utc_iso()}"
         )
         e = emb("Weather", desc)
         if edit:
-            await inter.edit_original_response(embed=e, view=None)
+            await inter.message.edit(embed=e, view=None)
         else:
             await inter.followup.send(embed=e, ephemeral=True)
     except RuntimeError as ex:
         e = emb("Weather", f"Fetch failed: {ex}")
         if edit:
-            await inter.edit_original_response(embed=e, view=None)
+            await inter.message.edit(embed=e, view=None)
         else:
             await inter.followup.send(embed=e, ephemeral=True)
 
