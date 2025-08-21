@@ -15,6 +15,7 @@ from matplotlib.ticker import FuncFormatter
 import pandas as pd
 import yfinance as yf
 import difflib
+from duckduckgo_search import DDGS
 
 try:  # optional candlestick support
     import mplfinance as mpf
@@ -32,6 +33,8 @@ ROLE_STATUS_ID = int(os.getenv("ROLE_STATUS_ID", "0") or 0)
 ROLE_PICK_CHANNEL_ID = int(os.getenv("ROLE_PICK_CHANNEL_ID", "0") or 0)
 PIPED_API_BASE = os.getenv("PIPED_API_BASE", "https://piped.video/api/v1").rstrip("/")
 PIPED_FRONTEND_BASE = os.getenv("PIPED_FRONTEND_BASE", "https://piped.video").rstrip("/")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "").strip()
 LAVENDER = 0xB57EDC
 
 intents = discord.Intents.default()
@@ -279,6 +282,10 @@ async def help_cmd(inter: discord.Interaction):
         "/wiki <query> — short summary",
         "/avatar [user] — show user's avatar",
         "/define <word> — dictionary lookup",
+        "/search <query> — web search",
+        "/image <query> — image search",
+        "/dog — random dog picture",
+        "/cat — random cat picture",
         "/weather <place> [unit] — current weather",
         "/stock <symbol> — show stock price & chart",
         "/rolesetup — post role picker (owner only)",
@@ -378,6 +385,133 @@ async def define_cmd(inter: discord.Interaction, word: str):
         await inter.followup.send(embed=emb(f"Define | {word}", desc), ephemeral=True)
     except RuntimeError as e:
         await inter.followup.send(embed=emb("Define", f"Error: {e}"), ephemeral=True)
+
+
+@tree.command(name="search", description="Search the web via DuckDuckGo.")
+@app_commands.describe(query="Search terms")
+@cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def search_cmd(inter: discord.Interaction, query: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        def ddg(q: str):
+            with DDGS() as ddgs:
+                results = list(ddgs.text(q, safesearch="Off", max_results=5))
+                image = next(ddgs.images(q, safesearch="Off", max_results=1), None)
+            return results, image
+        results, image = await asyncio.to_thread(ddg, query)
+        if not results:
+            return await inter.followup.send(embed=emb("Search", "No results."), ephemeral=True)
+        lines = []
+        for i, r in enumerate(results[:5], 1):
+            title = r.get("title") or "Untitled"
+            url = r.get("href") or r.get("url") or ""
+            body = (r.get("body") or r.get("snippet") or "").strip()
+            if len(body) > 150:
+                body = body[:150] + "…"
+            lines.append(f"{i}. [{title}]({url}) — {body}")
+        e = emb(f"Search | {query}", "\n".join(lines))
+        if image and image.get("image"):
+            e.set_image(url=image["image"])
+        await inter.followup.send(embed=e, ephemeral=True)
+    except Exception:
+        await inter.followup.send(embed=emb("Search", "Something went wrong."), ephemeral=True)
+
+
+class ImageSearchView(discord.ui.View):
+    def __init__(self, user_id: int, links: list[str], query: str):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.links = links
+        self.query = query
+        self.index = 0
+        self.message: discord.Message | None = None
+
+    def make_embed(self) -> discord.Embed:
+        e = emb(f"Image | {self.query}", f"{self.index + 1}/{len(self.links)}")
+        e.set_image(url=self.links[self.index])
+        return e
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        return inter.user.id == self.user_id
+
+    @discord.ui.button(label="Prev", style=discord.ButtonStyle.secondary)
+    async def prev(self, inter: discord.Interaction, _button: discord.ui.Button):
+        self.index = (self.index - 1) % len(self.links)
+        await inter.response.edit_message(embed=self.make_embed(), view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, inter: discord.Interaction, _button: discord.ui.Button):
+        self.index = (self.index + 1) % len(self.links)
+        await inter.response.edit_message(embed=self.make_embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+
+@tree.command(name="image", description="Search images via Google.")
+@app_commands.describe(query="Search terms")
+@cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def image_cmd(inter: discord.Interaction, query: str):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        return await inter.followup.send(embed=emb("Image", "API not configured."), ephemeral=True)
+    try:
+        data = await http_get_json(
+            "https://www.googleapis.com/customsearch/v1",
+            {"key": GOOGLE_API_KEY, "cx": GOOGLE_CSE_ID, "q": query, "searchType": "image", "safe": "off", "num": 10},
+        )
+        items = data.get("items") or []
+        links = [item.get("link") for item in items if item.get("link")]
+        if not links:
+            raise RuntimeError("No results")
+    except RuntimeError as e:
+        return await inter.followup.send(embed=emb("Image", f"Search failed: {e}"), ephemeral=True)
+    view = ImageSearchView(inter.user.id, links, query)
+    msg = await inter.followup.send(embed=view.make_embed(), view=view, ephemeral=True)
+    view.message = msg
+
+
+@tree.command(name="dog", description="Random dog picture.")
+@cooldown_fast
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def dog_cmd(inter: discord.Interaction):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        js = await http_get_json("https://dog.ceo/api/breeds/image/random")
+        url = js.get("message")
+        if not url:
+            raise RuntimeError("no image")
+        e = emb("Dog", "Here you go 🐶")
+        e.set_image(url=url)
+        await inter.followup.send(embed=e, ephemeral=True)
+    except RuntimeError as e:
+        await inter.followup.send(embed=emb("Dog", f"Error: {e}"), ephemeral=True)
+
+
+@tree.command(name="cat", description="Random cat picture.")
+@cooldown_fast
+@app_commands.default_permissions(use_application_commands=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def cat_cmd(inter: discord.Interaction):
+    await inter.response.defer(ephemeral=True, thinking=True)
+    try:
+        js = await http_get_json("https://api.thecatapi.com/v1/images/search")
+        url = js[0].get("url") if isinstance(js, list) and js else None
+        if not url:
+            raise RuntimeError("no image")
+        e = emb("Cat", "Here you go 🐱")
+        e.set_image(url=url)
+        await inter.followup.send(embed=e, ephemeral=True)
+    except RuntimeError as e:
+        await inter.followup.send(embed=emb("Cat", f"Error: {e}"), ephemeral=True)
 
 
 class WeatherStateButton(discord.ui.Button):
