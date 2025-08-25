@@ -51,12 +51,18 @@ def now_utc_iso():
 def is_owner(inter: discord.Interaction) -> bool:
     return OWNER_ID and inter.user and inter.user.id == OWNER_ID
 
+
+def use_ephemeral(inter: discord.Interaction) -> bool:
+    """Use ephemeral replies only when invoked inside a guild."""
+    return inter.guild is not None
+
 def emb(title: str, desc: str) -> discord.Embed:
     e = discord.Embed(title=title, description=desc, color=LAVENDER)
     e.timestamp = discord.utils.utcnow()
     return e
 
 async def reply_embed(inter: discord.Interaction, title: str, desc: str, *, ephemeral=True):
+    ephemeral = ephemeral and use_ephemeral(inter)
     if inter.response.is_done():
         await inter.followup.send(embed=emb(title, desc), ephemeral=ephemeral)
     else:
@@ -164,6 +170,8 @@ cooldown_medium = app_commands.checks.cooldown(2, 10.0)
 @tree.command(name="rolesetup", description="Post the Notification Preferences role picker (owner only).")
 @app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def rolesetup_cmd(inter: discord.Interaction):
+    if not inter.guild:
+        return await reply_embed(inter, "Not available", "This command can only be used in a server.")
     if not is_owner(inter):
         return await reply_embed(inter, "Denied", "Only the owner can do that.")
     await reply_embed(inter, "Working", "Posting role picker…", ephemeral=True)
@@ -198,13 +206,13 @@ async def purge_cmd(
     bots_only: bool = False,
     dry_run: bool = False,
 ):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         channel = inter.channel
         if not inter.guild or not isinstance(channel, discord.TextChannel):
             return await inter.followup.send(
                 embed=emb("Purge", "This only works in server text channels."),
-                ephemeral=True,
+                ephemeral=use_ephemeral(inter),
             )
 
         scanned_msgs = [m async for m in channel.history(limit=amount)]
@@ -261,11 +269,11 @@ async def purge_cmd(
             desc = f"Would purge {bulk_deleted} (bulk) + {old_deleted} (old) out of {scanned} scanned{note}"
         else:
             desc = f"Purged {bulk_deleted} (bulk) + {old_deleted} (old) out of {scanned} scanned{note}"
-        await inter.followup.send(embed=emb("Purge", desc), ephemeral=True)
+        await inter.followup.send(embed=emb("Purge", desc), ephemeral=use_ephemeral(inter))
     except Exception:
         await inter.followup.send(
             embed=emb("Purge", "Something went wrong while purging."),
-            ephemeral=True,
+            ephemeral=use_ephemeral(inter),
         )
 
 @tree.command(name="help", description="Show available commands.")
@@ -295,7 +303,7 @@ async def help_cmd(inter: discord.Interaction):
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Range[int, 1, 5] = 3):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     results_url = f"{PIPED_FRONTEND_BASE}/results?search_query={quote_plus(query)}"
     lines = []
     enriched = False
@@ -315,21 +323,21 @@ async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Ran
         pass
     if not enriched:
         lines = [f"Open results: {results_url}"]
-    await inter.followup.send(embed=emb("YouTube", "\n".join(lines)), ephemeral=True)
+    await inter.followup.send(embed=emb("YouTube", "\n".join(lines)), ephemeral=use_ephemeral(inter))
 
 @tree.command(name="wiki", description="Short Wikipedia summary.")
 @app_commands.describe(query="Topic to search")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def wiki_cmd(inter: discord.Interaction, query: str):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         sr = await http_get_json("https://en.wikipedia.org/w/api.php", {"action": "opensearch", "search": query, "limit": 1, "namespace": 0, "format": "json"})
         title = (sr[1][0] if isinstance(sr, list) and len(sr) > 1 and sr[1] else "").strip()
     except RuntimeError as e:
-        return await inter.followup.send(embed=emb("Wiki", f"Search failed: {e}"), ephemeral=True)
+        return await inter.followup.send(embed=emb("Wiki", f"Search failed: {e}"), ephemeral=use_ephemeral(inter))
     if not title:
-        return await inter.followup.send(embed=emb("Wiki", "No results."), ephemeral=True)
+        return await inter.followup.send(embed=emb("Wiki", "No results."), ephemeral=use_ephemeral(inter))
     slug = quote(title.replace(" ", "_"), safe="")
     try:
         js = await http_get_json(f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}")
@@ -338,9 +346,9 @@ async def wiki_cmd(inter: discord.Interaction, query: str):
         if len(extract) > 1000:
             extract = extract[:1000] + "…"
         body = f"{extract}\n\n{url}" if url else extract
-        return await inter.followup.send(embed=emb("Wiki", body), ephemeral=True)
+        return await inter.followup.send(embed=emb("Wiki", body), ephemeral=use_ephemeral(inter))
     except RuntimeError as e:
-        return await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=True)
+        return await inter.followup.send(embed=emb("Wiki", f"Fetch failed: {e}"), ephemeral=use_ephemeral(inter))
 
 
 @tree.command(name="avatar", description="Show a user's avatar.")
@@ -351,7 +359,7 @@ async def avatar_cmd(inter: discord.Interaction, user: discord.User | None = Non
     target = user or inter.user
     embed = emb(f"Avatar | {target.display_name}", "")
     embed.set_image(url=target.display_avatar.url)
-    await inter.response.send_message(embed=embed, ephemeral=True)
+    await inter.response.send_message(embed=embed, ephemeral=use_ephemeral(inter))
 
 
 @tree.command(name="define", description="Look up a word in the dictionary.")
@@ -359,7 +367,7 @@ async def avatar_cmd(inter: discord.Interaction, user: discord.User | None = Non
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def define_cmd(inter: discord.Interaction, word: str):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         data = await http_get_json(
             f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word)}"
@@ -375,9 +383,9 @@ async def define_cmd(inter: discord.Interaction, word: str):
         desc = f"{definition}"
         if part:
             desc = f"*{part}* — {desc}"
-        await inter.followup.send(embed=emb(f"Define | {word}", desc), ephemeral=True)
+        await inter.followup.send(embed=emb(f"Define | {word}", desc), ephemeral=use_ephemeral(inter))
     except RuntimeError as e:
-        await inter.followup.send(embed=emb("Define", f"Error: {e}"), ephemeral=True)
+        await inter.followup.send(embed=emb("Define", f"Error: {e}"), ephemeral=use_ephemeral(inter))
 
 
 @tree.command(name="search", description="Search the web via DuckDuckGo.")
@@ -385,7 +393,7 @@ async def define_cmd(inter: discord.Interaction, word: str):
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def search_cmd(inter: discord.Interaction, query: str):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         def ddg(q: str):
             with DDGS() as ddgs:
@@ -394,7 +402,7 @@ async def search_cmd(inter: discord.Interaction, query: str):
             return results, image
         results, image = await asyncio.to_thread(ddg, query)
         if not results:
-            return await inter.followup.send(embed=emb("Search", "No results."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Search", "No results."), ephemeral=use_ephemeral(inter))
         lines = []
         for i, r in enumerate(results[:5], 1):
             title = r.get("title") or "Untitled"
@@ -406,9 +414,9 @@ async def search_cmd(inter: discord.Interaction, query: str):
         e = emb(f"Search | {query}", "\n".join(lines))
         if image and image.get("image"):
             e.set_image(url=image["image"])
-        await inter.followup.send(embed=e, ephemeral=True)
+        await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
     except Exception:
-        await inter.followup.send(embed=emb("Search", "Something went wrong."), ephemeral=True)
+        await inter.followup.send(embed=emb("Search", "Something went wrong."), ephemeral=use_ephemeral(inter))
 
 
 class ImageSearchView(discord.ui.View):
@@ -450,9 +458,9 @@ class ImageSearchView(discord.ui.View):
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def image_cmd(inter: discord.Interaction, query: str):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
-        return await inter.followup.send(embed=emb("Image", "API not configured."), ephemeral=True)
+        return await inter.followup.send(embed=emb("Image", "API not configured."), ephemeral=use_ephemeral(inter))
     try:
         data = await http_get_json(
             "https://www.googleapis.com/customsearch/v1",
@@ -463,9 +471,9 @@ async def image_cmd(inter: discord.Interaction, query: str):
         if not links:
             raise RuntimeError("No results")
     except RuntimeError as e:
-        return await inter.followup.send(embed=emb("Image", f"Search failed: {e}"), ephemeral=True)
+        return await inter.followup.send(embed=emb("Image", f"Search failed: {e}"), ephemeral=use_ephemeral(inter))
     view = ImageSearchView(inter.user.id, links, query)
-    msg = await inter.followup.send(embed=view.make_embed(), view=view, ephemeral=True)
+    msg = await inter.followup.send(embed=view.make_embed(), view=view, ephemeral=use_ephemeral(inter))
     view.message = msg
 
 
@@ -473,7 +481,7 @@ async def image_cmd(inter: discord.Interaction, query: str):
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
 async def dog_cmd(inter: discord.Interaction):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         js = await http_get_json("https://dog.ceo/api/breeds/image/random")
         url = js.get("message")
@@ -481,16 +489,16 @@ async def dog_cmd(inter: discord.Interaction):
             raise RuntimeError("no image")
         e = emb("Dog", "Here you go 🐶")
         e.set_image(url=url)
-        await inter.followup.send(embed=e, ephemeral=True)
+        await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
     except RuntimeError as e:
-        await inter.followup.send(embed=emb("Dog", f"Error: {e}"), ephemeral=True)
+        await inter.followup.send(embed=emb("Dog", f"Error: {e}"), ephemeral=use_ephemeral(inter))
 
 
 @tree.command(name="cat", description="Random cat picture.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
 async def cat_cmd(inter: discord.Interaction):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         js = await http_get_json("https://api.thecatapi.com/v1/images/search")
         url = js[0].get("url") if isinstance(js, list) and js else None
@@ -498,9 +506,9 @@ async def cat_cmd(inter: discord.Interaction):
             raise RuntimeError("no image")
         e = emb("Cat", "Here you go 🐱")
         e.set_image(url=url)
-        await inter.followup.send(embed=e, ephemeral=True)
+        await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
     except RuntimeError as e:
-        await inter.followup.send(embed=emb("Cat", f"Error: {e}"), ephemeral=True)
+        await inter.followup.send(embed=emb("Cat", f"Error: {e}"), ephemeral=use_ephemeral(inter))
 
 
 class WeatherStateButton(discord.ui.Button):
@@ -576,7 +584,7 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
             if edit:
                 await inter.followup.edit_message(inter.message.id, embed=e, view=None)
             else:
-                await inter.followup.send(embed=e, ephemeral=True)
+                await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
             return
         desc = (
             f"Location - {display_name}\n"
@@ -588,13 +596,13 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
         if edit:
             await inter.followup.edit_message(inter.message.id, embed=e, view=None)
         else:
-            await inter.followup.send(embed=e, ephemeral=True)
+            await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
     except RuntimeError as ex:
         e = emb("Weather", f"Fetch failed: {ex}")
         if edit:
             await inter.followup.edit_message(inter.message.id, embed=e, view=None)
         else:
-            await inter.followup.send(embed=e, ephemeral=True)
+            await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
 
 
 @tree.command(name="weather", description="Current weather for a place.")
@@ -603,7 +611,7 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         geo = await http_get_json(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -611,9 +619,9 @@ async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands
         )
         results = geo.get("results") if geo else None
         if not results:
-            return await inter.followup.send(embed=emb("Weather", "Location not found."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Weather", "Location not found."), ephemeral=use_ephemeral(inter))
     except RuntimeError as e:
-        return await inter.followup.send(embed=emb("Weather", f"Geocoding failed: {e}"), ephemeral=True)
+        return await inter.followup.send(embed=emb("Weather", f"Geocoding failed: {e}"), ephemeral=use_ephemeral(inter))
 
     choice = unit.value if unit else "auto"
     us_matches = [g for g in results if g.get("country_code") == "US" and (g.get("name", "").lower() == place.lower())]
@@ -622,7 +630,7 @@ async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands
         return await inter.followup.send(
             embed=emb("Weather", "Multiple matches found. Choose a state."),
             view=view,
-            ephemeral=True,
+            ephemeral=use_ephemeral(inter),
         )
 
     g0 = us_matches[0] if us_matches else results[0]
@@ -636,27 +644,27 @@ async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands
 async def resync_cmd(inter: discord.Interaction, scope: app_commands.Choice[str]):
     if not is_owner(inter):
         return await reply_embed(inter, "Denied", "Only the owner can do that.")
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         if scope.value == "guild":
             if not GUILD_ID:
-                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
+                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=use_ephemeral(inter))
             synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
-            return await inter.followup.send(embed=emb("Resync", f"Guild sync OK ({len(synced)} commands)."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Resync", f"Guild sync OK ({len(synced)} commands)."), ephemeral=use_ephemeral(inter))
         elif scope.value == "global":
             synced = await tree.sync()
-            return await inter.followup.send(embed=emb("Resync", f"Global sync OK ({len(synced)} commands)."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Resync", f"Global sync OK ({len(synced)} commands)."), ephemeral=use_ephemeral(inter))
         elif scope.value == "guild_clear":
             if not GUILD_ID:
-                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=True)
+                return await inter.followup.send(embed=emb("Resync", "No GUILD_ID set."), ephemeral=use_ephemeral(inter))
             tree.clear_commands(guild=discord.Object(id=GUILD_ID))
             tree.copy_global_to(guild=discord.Object(id=GUILD_ID))
             synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
-            return await inter.followup.send(embed=emb("Resync", f"Cleared & copied global → guild ({len(synced)} commands)."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Resync", f"Cleared & copied global → guild ({len(synced)} commands)."), ephemeral=use_ephemeral(inter))
         else:
-            return await inter.followup.send(embed=emb("Resync", "Unknown scope."), ephemeral=True)
+            return await inter.followup.send(embed=emb("Resync", "Unknown scope."), ephemeral=use_ephemeral(inter))
     except Exception as e:
-        return await inter.followup.send(embed=emb("Resync", f"Failed: {e}"), ephemeral=True)
+        return await inter.followup.send(embed=emb("Resync", f"Failed: {e}"), ephemeral=use_ephemeral(inter))
 
 # quick fuzzy ticker autocorrect
 def normalize_symbol(s: str) -> str:
@@ -790,14 +798,14 @@ def fetch_price_and_chart(symbol: str):
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
 async def stock(inter: discord.Interaction, symbol: str):
-    await inter.response.defer(ephemeral=True, thinking=True)
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
     try:
         sym, last_price, day_change_pct, month_change_pct, img = await asyncio.to_thread(
             fetch_price_and_chart, symbol
         )
         if sym is None:
             return await inter.followup.send(
-                embed=emb("Stock", f"Couldn't find data for `{symbol}`."), ephemeral=True
+                embed=emb("Stock", f"Couldn't find data for `{symbol}`."), ephemeral=use_ephemeral(inter)
             )
 
         arrow_day = "▲" if day_change_pct >= 0 else "▼"
@@ -812,9 +820,9 @@ async def stock(inter: discord.Interaction, symbol: str):
         file = discord.File(img, filename=f"{sym}.png")
         embed = emb(f"Stocks | {sym}", desc)
         embed.set_image(url=f"attachment://{sym}.png")
-        await inter.followup.send(embed=embed, file=file, ephemeral=True)
+        await inter.followup.send(embed=embed, file=file, ephemeral=use_ephemeral(inter))
     except Exception as e:
-        await inter.followup.send(embed=emb("Stock", f"Error: {e}"), ephemeral=True)
+        await inter.followup.send(embed=emb("Stock", f"Error: {e}"), ephemeral=use_ephemeral(inter))
 
 @tree.error
 async def on_app_command_error(inter: discord.Interaction, error: app_commands.AppCommandError):
