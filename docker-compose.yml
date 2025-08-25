@@ -18,5 +18,11 @@ services:
       - TZ=America/Chicago
     restart: unless-stopped
 
+  frontend:
+    build: ./frontend
+    ports:
+      - "3501:3501"
+    restart: unless-stopped
+
 volumes:
   pip-cache:
