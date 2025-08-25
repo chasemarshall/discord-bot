@@ -145,9 +145,8 @@ async def on_ready():
     if not getattr(client, "synced", False):
         try:
             if GUILD_ID:
-                synced = await tree.sync(guild=discord.Object(id=GUILD_ID))
-            else:
-                synced = await tree.sync()
+                await tree.sync(guild=discord.Object(id=GUILD_ID))
+            synced = await tree.sync()
             print(f"Synced {len(synced)} command(s)")
             client.synced = True
         except Exception as e:
@@ -174,7 +173,6 @@ async def rolesetup_cmd(inter: discord.Interaction):
 @tree.command(name="status", description="Bot presence and latency.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def status_cmd(inter: discord.Interaction):
     u = client.user
     desc = f"Bot: {u.mention if u else '—'}\nPresence: watching over homelab\nLatency: {round(client.latency * 1000)} ms\n{now_utc_iso()}"
@@ -273,7 +271,6 @@ async def purge_cmd(
 @tree.command(name="help", description="Show available commands.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def help_cmd(inter: discord.Interaction):
     lines = [
         "/status — bot presence + latency",
@@ -297,7 +294,6 @@ async def help_cmd(inter: discord.Interaction):
 @app_commands.describe(query="Search terms", limit="Max links (1–5, default 3)")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Range[int, 1, 5] = 3):
     await inter.response.defer(ephemeral=True, thinking=True)
     results_url = f"{PIPED_FRONTEND_BASE}/results?search_query={quote_plus(query)}"
@@ -325,7 +321,6 @@ async def yt_cmd(inter: discord.Interaction, query: str, limit: app_commands.Ran
 @app_commands.describe(query="Topic to search")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def wiki_cmd(inter: discord.Interaction, query: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -352,7 +347,6 @@ async def wiki_cmd(inter: discord.Interaction, query: str):
 @app_commands.describe(user="User to display")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def avatar_cmd(inter: discord.Interaction, user: discord.User | None = None):
     target = user or inter.user
     embed = emb(f"Avatar | {target.display_name}", "")
@@ -364,7 +358,6 @@ async def avatar_cmd(inter: discord.Interaction, user: discord.User | None = Non
 @app_commands.describe(word="Word to define")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def define_cmd(inter: discord.Interaction, word: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -391,7 +384,6 @@ async def define_cmd(inter: discord.Interaction, word: str):
 @app_commands.describe(query="Search terms")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def search_cmd(inter: discord.Interaction, query: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -457,7 +449,6 @@ class ImageSearchView(discord.ui.View):
 @app_commands.describe(query="Search terms")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def image_cmd(inter: discord.Interaction, query: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
@@ -481,7 +472,6 @@ async def image_cmd(inter: discord.Interaction, query: str):
 @tree.command(name="dog", description="Random dog picture.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def dog_cmd(inter: discord.Interaction):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -499,7 +489,6 @@ async def dog_cmd(inter: discord.Interaction):
 @tree.command(name="cat", description="Random cat picture.")
 @cooldown_fast
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def cat_cmd(inter: discord.Interaction):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -613,7 +602,6 @@ async def send_weather_from_geo(inter: discord.Interaction, g0: dict, choice: st
 @app_commands.choices(unit=[app_commands.Choice(name="auto", value="auto"), app_commands.Choice(name="metric (°C, m/s)", value="metric"), app_commands.Choice(name="imperial (°F, mph)", value="imperial")])
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def weather_cmd(inter: discord.Interaction, place: str, unit: app_commands.Choice[str] | None = None):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
@@ -801,7 +789,6 @@ def fetch_price_and_chart(symbol: str):
 @app_commands.describe(symbol="Ticker (e.g., AAPL, TSLA)")
 @cooldown_medium
 @app_commands.default_permissions(use_application_commands=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
 async def stock(inter: discord.Interaction, symbol: str):
     await inter.response.defer(ephemeral=True, thinking=True)
     try:
