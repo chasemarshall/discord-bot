@@ -419,6 +419,36 @@ async def search_cmd(inter: discord.Interaction, query: str):
         await inter.followup.send(embed=emb("Search", "Something went wrong."), ephemeral=use_ephemeral(inter))
 
 
+@tree.command(name="news", description="Search news via DuckDuckGo.")
+@app_commands.describe(query="Search terms")
+@cooldown_medium
+@app_commands.default_permissions(use_application_commands=True)
+async def news_cmd(inter: discord.Interaction, query: str):
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
+    try:
+        def ddg_news(q: str):
+            with DDGS() as ddgs:
+                return list(ddgs.news(q, safesearch="Off", max_results=5))
+        results = await asyncio.to_thread(ddg_news, query)
+        if not results:
+            return await inter.followup.send(embed=emb("News", "No results."), ephemeral=use_ephemeral(inter))
+        lines = []
+        for i, r in enumerate(results[:5], 1):
+            title = r.get("title") or "Untitled"
+            url = r.get("url") or ""
+            source = r.get("source") or ""
+            date = r.get("date") or ""
+            meta = " — ".join(filter(None, [source, date]))
+            line = f"{i}. [{title}]({url})"
+            if meta:
+                line += f" — {meta}"
+            lines.append(line)
+        e = emb(f"News | {query}", "\n".join(lines))
+        await inter.followup.send(embed=e, ephemeral=use_ephemeral(inter))
+    except Exception:
+        await inter.followup.send(embed=emb("News", "Something went wrong."), ephemeral=use_ephemeral(inter))
+
+
 class ImageSearchView(discord.ui.View):
     def __init__(self, user_id: int, links: list[str], query: str):
         super().__init__(timeout=60)
