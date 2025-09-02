@@ -16,6 +16,8 @@ import pandas as pd
 import yfinance as yf
 import difflib
 from duckduckgo_search import DDGS
+import openai
+import base64
 
 try:  # optional candlestick support
     import mplfinance as mpf
@@ -35,11 +37,16 @@ PIPED_API_BASE = os.getenv("PIPED_API_BASE", "https://piped.video/api/v1").rstri
 PIPED_FRONTEND_BASE = os.getenv("PIPED_FRONTEND_BASE", "https://piped.video").rstrip("/")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LAVENDER = 0xB57EDC
 
 intents = discord.Intents.default()
 intents.guilds = True
+intents.message_content = True
 client = commands.Bot(command_prefix="!", intents=intents)
+
+# Initialize OpenAI client
+openai_client = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 tree = client.tree
 
 _http: aiohttp.ClientSession | None = None
@@ -82,6 +89,86 @@ async def http_get_json(url: str, params: dict | None = None, timeout_sec: float
         raise RuntimeError("timeout")
     except aiohttp.ClientError as e:
         raise RuntimeError(str(e) or "client error")
+
+async def moderate_text(text: str) -> dict | None:
+    """Moderate text content using OpenAI's moderation API."""
+    if not openai_client or not text.strip():
+        return None
+    
+    try:
+        response = await asyncio.to_thread(
+            openai_client.moderations.create,
+            input=text,
+            model="omni-moderation-latest"
+        )
+        return response.results[0] if response.results else None
+    except Exception as e:
+        print(f"Text moderation error: {e}")
+        return None
+
+async def moderate_image(image_url: str) -> dict | None:
+    """Moderate image content using OpenAI's moderation API."""
+    if not openai_client or not image_url:
+        return None
+    
+    try:
+        response = await asyncio.to_thread(
+            openai_client.moderations.create,
+            input=[{"type": "image_url", "image_url": {"url": image_url}}],
+            model="omni-moderation-latest"
+        )
+        return response.results[0] if response.results else None
+    except Exception as e:
+        print(f"Image moderation error: {e}")
+        return None
+
+async def handle_moderation_result(message: discord.Message, result: dict, content_type: str = "content"):
+    """Handle moderation result by taking appropriate action."""
+    if not result or not result.flagged:
+        return
+    
+    # Get flagged categories
+    flagged_categories = [cat for cat, flagged in result.categories.model_dump().items() if flagged]
+    
+    try:
+        # Delete the message
+        await message.delete()
+        
+        # Send a warning to the user
+        warning_embed = discord.Embed(
+            title="Content Moderated",
+            description=f"Your {content_type} was removed for violating community guidelines.",
+            color=0xFF0000
+        )
+        warning_embed.add_field(
+            name="Flagged Categories",
+            value=", ".join(flagged_categories) if flagged_categories else "Policy violation",
+            inline=False
+        )
+        warning_embed.set_footer(text="Please review the server rules and avoid posting similar content.")
+        
+        try:
+            await message.author.send(embed=warning_embed)
+        except discord.Forbidden:
+            # If we can't DM the user, send to channel temporarily
+            warning_msg = await message.channel.send(f"{message.author.mention}", embed=warning_embed)
+            # Delete the warning after 10 seconds
+            await asyncio.sleep(10)
+            try:
+                await warning_msg.delete()
+            except discord.NotFound:
+                pass
+        
+        # Log to console
+        print(f"Moderated {content_type} from {message.author} ({message.author.id}) in #{message.channel}: {flagged_categories}")
+        
+    except discord.NotFound:
+        # Message was already deleted
+        pass
+    except discord.Forbidden:
+        print(f"Missing permissions to moderate message from {message.author} in #{message.channel}")
+    except Exception as e:
+        print(f"Error handling moderation result: {e}")
 
 def hhmmss(seconds: int | None) -> str:
     if seconds is None:
@@ -157,6 +244,50 @@ async def on_ready():
             client.synced = True
         except Exception as e:
             print("Sync failed:", e)
+    
+    if openai_client:
+        print("OpenAI moderation enabled")
+    else:
+        print("OpenAI moderation disabled - set OPENAI_API_KEY to enable")
+
+@client.event
+async def on_message(message):
+    # Don't moderate bot messages or system messages
+    if message.author.bot or message.is_system():
+        return
+    
+    # Don't moderate DMs
+    if not message.guild:
+        return
+    
+    # Process slash commands first
+    await client.process_commands(message)
+    
+    # Skip moderation if OpenAI client is not configured
+    if not openai_client:
+        return
+    
+    # Moderate text content
+    if message.content.strip():
+        try:
+            moderation_result = await moderate_text(message.content)
+            if moderation_result:
+                await handle_moderation_result(message, moderation_result, "message")
+                return  # Don't check images if text was flagged
+        except Exception as e:
+            print(f"Error moderating text: {e}")
+    
+    # Moderate image attachments
+    for attachment in message.attachments:
+        if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+            try:
+                moderation_result = await moderate_image(attachment.url)
+                if moderation_result:
+                    await handle_moderation_result(message, moderation_result, "image")
+                    break  # Stop checking other images if one is flagged
+            except Exception as e:
+                print(f"Error moderating image: {e}")
+                continue
 
 @client.event
 async def on_close():
@@ -283,6 +414,7 @@ async def help_cmd(inter: discord.Interaction):
     lines = [
         "/status — bot presence + latency",
         "/purge — bulk delete messages with filters (requires Manage Messages)",
+        "/moderate — manually check content for policy violations (requires Manage Messages)",
         "/yt <query> [limit] — search via Piped",
         "/wiki <query> — short summary",
         "/avatar [user] — show user's avatar",
@@ -297,6 +429,90 @@ async def help_cmd(inter: discord.Interaction):
         "/resync <scope> — refresh commands (owner only)",
     ]
     await reply_embed(inter, "Commands", "\n".join(lines), ephemeral=True)
+
+@tree.command(name="moderate", description="Manually check content for policy violations.")
+@app_commands.describe(
+    text="Text content to check for policy violations",
+    image_url="Image URL to check for policy violations"
+)
+@cooldown_medium
+@app_commands.default_permissions(manage_messages=True, use_application_commands=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID)) if GUILD_ID else (lambda f: f)
+async def moderate_cmd(
+    inter: discord.Interaction,
+    text: str | None = None,
+    image_url: str | None = None,
+):
+    if not openai_client:
+        return await reply_embed(inter, "Moderation Unavailable", "OpenAI moderation is not configured. Set OPENAI_API_KEY environment variable.")
+    
+    if not text and not image_url:
+        return await reply_embed(inter, "No Content", "Please provide either text or an image URL to moderate.")
+    
+    await inter.response.defer(ephemeral=use_ephemeral(inter), thinking=True)
+    
+    results = []
+    
+    # Check text if provided
+    if text:
+        try:
+            text_result = await moderate_text(text)
+            if text_result:
+                flagged_categories = [cat for cat, flagged in text_result.categories.model_dump().items() if flagged]
+                results.append({
+                    "type": "Text",
+                    "flagged": text_result.flagged,
+                    "categories": flagged_categories,
+                    "category_scores": text_result.category_scores.model_dump()
+                })
+        except Exception as e:
+            results.append({"type": "Text", "error": str(e)})
+    
+    # Check image if provided
+    if image_url:
+        try:
+            image_result = await moderate_image(image_url)
+            if image_result:
+                flagged_categories = [cat for cat, flagged in image_result.categories.model_dump().items() if flagged]
+                results.append({
+                    "type": "Image",
+                    "flagged": image_result.flagged,
+                    "categories": flagged_categories,
+                    "category_scores": image_result.category_scores.model_dump()
+                })
+        except Exception as e:
+            results.append({"type": "Image", "error": str(e)})
+    
+    # Format results
+    embed = discord.Embed(
+        title="Moderation Results",
+        color=0xFF0000 if any(r.get("flagged") for r in results) else 0x00FF00
+    )
+    
+    for result in results:
+        if "error" in result:
+            embed.add_field(
+                name=f"{result['type']} - Error",
+                value=f"```{result['error']}```",
+                inline=False
+            )
+        else:
+            status = "🚫 FLAGGED" if result["flagged"] else "✅ CLEAN"
+            categories = ", ".join(result["categories"]) if result["categories"] else "None"
+            
+            # Show top 3 highest scoring categories
+            sorted_scores = sorted(result["category_scores"].items(), key=lambda x: x[1], reverse=True)[:3]
+            score_text = "\n".join([f"{cat}: {score:.3f}" for cat, score in sorted_scores])
+            
+            embed.add_field(
+                name=f"{result['type']} - {status}",
+                value=f"**Flagged Categories:** {categories}\n**Top Scores:**\n```{score_text}```",
+                inline=False
+            )
+    
+    embed.set_footer(text="Moderation powered by OpenAI")
+    await inter.followup.send(embed=embed, ephemeral=use_ephemeral(inter))
 
 @tree.command(name="yt", description="Search YouTube via your Piped instance.")
 @app_commands.describe(query="Search terms", limit="Max links (1–5, default 3)")

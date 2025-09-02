@@ -15,6 +15,7 @@ services:
       - ROLE_PICK_CHANNEL_ID=${ROLE_PICK_CHANNEL_ID}
       - PIPED_API_BASE=${PIPED_API_BASE}
       - PIPED_FRONTEND_BASE=${PIPED_FRONTEND_BASE}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TZ=America/Chicago
     restart: unless-stopped
 
