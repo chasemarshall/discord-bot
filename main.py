@@ -19,6 +19,10 @@ from duckduckgo_search import DDGS
 import openai
 import base64
 
+print("=" * 50)
+print("DISCORD BOT STARTING WITH MODERATION v2.0")
+print("=" * 50)
+
 try:  # optional candlestick support
     import mplfinance as mpf
     USE_CANDLES = True
