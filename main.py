@@ -20,7 +20,7 @@ import openai
 import base64
 
 print("=" * 50)
-print("DISCORD BOT STARTING WITH MODERATION v2.0")
+print("DISCORD BOT STARTING WITH MODERATION v2.1 - CACHE BUST")
 print("=" * 50)
 print(f"Environment check:")
 print(f"- DISCORD_TOKEN present: {bool(os.getenv('DISCORD_TOKEN'))}")
