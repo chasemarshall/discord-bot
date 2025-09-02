@@ -46,7 +46,13 @@ intents.message_content = True
 client = commands.Bot(command_prefix="!", intents=intents)
 
 # Initialize OpenAI client
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+openai_client = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print(f"Failed to initialize OpenAI client: {e}")
+        openai_client = None
 tree = client.tree
 
 _http: aiohttp.ClientSession | None = None

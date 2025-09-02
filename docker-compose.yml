@@ -1,11 +1,7 @@
 services:
   discord-bot:
-    image: python:3.12-slim
-    working_dir: /app
-    volumes:
-      - ./:/app:ro
-      - pip-cache:/root/.cache/pip
-    command: sh -c "pip install --no-cache-dir -r requirements.txt && python main.py"
+    build: .
+    restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - DISCORD_OWNER_ID=${DISCORD_OWNER_ID}
@@ -17,13 +13,9 @@ services:
       - PIPED_FRONTEND_BASE=${PIPED_FRONTEND_BASE}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TZ=America/Chicago
-    restart: unless-stopped
 
   frontend:
     build: ./frontend
     ports:
       - "3501:3501"
     restart: unless-stopped
-
-volumes:
-  pip-cache:
