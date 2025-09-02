@@ -14,4 +14,4 @@ RUN echo "Build date: $BUILD_DATE"
 # Add a simple test to verify OpenAI import works
 RUN python -c "import openai; print('OpenAI import successful')"
 
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]
