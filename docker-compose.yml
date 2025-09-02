@@ -1,6 +1,9 @@
 services:
   discord-bot:
-    build: .
+    build: 
+      context: .
+      args:
+        BUILD_DATE: ${BUILD_DATE:-$(date +%s)}
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
