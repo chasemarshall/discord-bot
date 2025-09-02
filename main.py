@@ -47,12 +47,17 @@ client = commands.Bot(command_prefix="!", intents=intents)
 
 # Initialize OpenAI client
 openai_client = None
+print(f"DEBUG: OPENAI_API_KEY present: {bool(OPENAI_API_KEY)}")
+print(f"DEBUG: OPENAI_API_KEY length: {len(OPENAI_API_KEY) if OPENAI_API_KEY else 0}")
 if OPENAI_API_KEY:
     try:
         openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        print("DEBUG: OpenAI client initialized successfully")
     except Exception as e:
         print(f"Failed to initialize OpenAI client: {e}")
         openai_client = None
+else:
+    print("DEBUG: No OPENAI_API_KEY found")
 tree = client.tree
 
 _http: aiohttp.ClientSession | None = None
