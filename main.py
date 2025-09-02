@@ -22,6 +22,16 @@ import base64
 print("=" * 50)
 print("DISCORD BOT STARTING WITH MODERATION v2.0")
 print("=" * 50)
+print(f"Environment check:")
+print(f"- DISCORD_TOKEN present: {bool(os.getenv('DISCORD_TOKEN'))}")
+print(f"- OPENAI_API_KEY present: {bool(os.getenv('OPENAI_API_KEY'))}")
+if os.getenv('OPENAI_API_KEY'):
+    key = os.getenv('OPENAI_API_KEY')
+    print(f"- OPENAI_API_KEY length: {len(key)}")
+    print(f"- OPENAI_API_KEY starts with: {key[:10]}...")
+else:
+    print("- OPENAI_API_KEY is None or empty")
+print("=" * 50)
 
 try:  # optional candlestick support
     import mplfinance as mpf
